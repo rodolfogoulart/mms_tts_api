@@ -17,9 +17,9 @@ from .monitoring import router as monitoring_router
 app = FastAPI(title="Hebrew & Greek TTS API", description="API especializada em TTS para Hebraico e Grego usando MMS-TTS")
 
 # Incluir as rotas de monitoring
-# app.include_router(monitoring_router, prefix="/monitoring", tags=["monitoring"])
+app.include_router(monitoring_router, prefix="/monitoring", tags=["monitoring"])
 # Alternativamente, sem prefix para manter as rotas no nível raiz:
-app.include_router(monitoring_router, tags=["monitoring"])
+# app.include_router(monitoring_router, tags=["monitoring"])
 
 # Configuração de logging
 logging.basicConfig(level=logging.INFO)
