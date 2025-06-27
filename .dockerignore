@@ -1,0 +1,64 @@
+# Git e controle de versão
+.git
+.gitignore
+*.md
+README*
+LICENSE
+CHANGELOG*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.cache
+.mypy_cache
+.dmypy.json
+dmypy.json
+
+# Ambientes virtuais
+venv/
+env/
+ENV/
+.venv
+.env
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Arquivos temporários
+temp/
+tmp/
+*.tmp
+*.log
+logs/
+
+# Arquivos de áudio gerados
+audios/
+*.wav
+*.mp3
+*.m4a
+
+# Cache do HuggingFace
+.cache/
+models/
+
+# Arquivos de desenvolvimento
+test_*.py
+examples/
+docs/
+screenshots/

@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  hebrew-greek-tts:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: hebrew-greek-tts
+    ports:
+      - "8000:8000"
+    volumes:
+      # Cache persistente para modelos (evita re-download)
+      - hf-cache:/home/app/.cache/huggingface
+      - transformers-cache:/home/app/.cache/transformers
+      - torch-cache:/home/app/.cache/torch
+      # Logs persistentes
+      - ./logs:/home/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  hf-cache:
+    driver: local
+  transformers-cache:
+    driver: local  
+  torch-cache:
+    driver: local

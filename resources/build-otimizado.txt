@@ -1,0 +1,20 @@
+#!/bin/bash
+
+echo "🧹 Limpando builds anteriores..."
+docker system prune -f
+docker image prune -f
+
+echo "🔧 Construindo imagem otimizada..."
+docker build \
+    --no-cache \
+    --tag hebrew-greek-tts:latest \
+    --tag hebrew-greek-tts:2.0 \
+    --label "build.date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+    --label "build.version=2.0" \
+    .
+
+echo "📊 Verificando tamanho da imagem..."
+docker images hebrew-greek-tts:latest
+
+echo "🚀 Para executar:"
+echo "docker run -p 8000:8000 --name hebrew-greek-tts hebrew-greek-tts:latest"
