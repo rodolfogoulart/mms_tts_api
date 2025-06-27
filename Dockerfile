@@ -58,15 +58,15 @@ RUN mkdir -p /home/app/.cache/huggingface \
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:3000/health || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # Expor porta
-EXPOSE 3000
+EXPOSE 8000
 
 # Comando otimizado com configurações de performance
 CMD ["uvicorn", "app.multi_model_api:app", \
      "--host", "0.0.0.0", \
-     "--port", "3000", \
+     "--port", "8000", \
      "--workers", "1", \
      "--access-log", \
      "--log-level", "info"]

@@ -14,7 +14,7 @@ import logging
 # Importar o router de monitoring
 from .monitoring import router as monitoring_router
 
-app = FastAPI(title="Hebrew & Greek TTS API", description="API especializada em TTS para Hebraico e Grego usando MMS-TTS")
+app = FastAPI(title="Hebrew & Greek TTS API", description="API especializada em TTS para Hebraico e Grego usando facebook/mms-tts")
 
 # Incluir as rotas de monitoring
 app.include_router(monitoring_router, prefix="/monitoring", tags=["monitoring"])
@@ -75,12 +75,12 @@ MODEL_CONFIG = {
     #     "type": "mms",
     #     "supported_languages": {"eng": "English"}
     # },
-    # "portuguese": {
-    #     "name": "MMS-TTS Portuguese",
-    #     "model_id": "facebook/mms-tts-por",
-    #     "type": "mms",
-    #     "supported_languages": {"por": "Portuguese"}
-    # },
+    "portuguese": {
+        "name": "MMS-TTS Portuguese",
+        "model_id": "facebook/mms-tts-por",
+        "type": "mms",
+        "supported_languages": {"por": "Portuguese"}
+    },
 }
 
 # Presets de voz (simplificados para MMS-TTS)
@@ -143,10 +143,10 @@ def get_model_for_language(lang: str):
 @app.get("/")
 def root():
     return {
-        "message": "Hebrew & Greek TTS API (Accelerated)",
+        "message": "Aletheia Project - Hebrew & Greek TTS API",
         "models": {k: v["name"] for k, v in MODEL_CONFIG.items()},
         "supported_languages": ["heb (Hebrew)", "ell (Greek)"],
-        "endpoints": ["/speak", "/models", "/languages", "/health", "/voice-presets"],
+        "endpoints": ["/speak", "/models", "/languages", "/health", "/voice-presets", "/monitoring/metrics", "/monitoring/health/detailed"],
         "performance": {
             "accelerate_enabled": True,
             "mixed_precision": accelerator.mixed_precision,
@@ -348,4 +348,4 @@ def get_voice_presets():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

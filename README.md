@@ -28,10 +28,10 @@ docker build -t hebrew-greek-tts .
 docker-compose up --build
 
 # Executar API
-docker run -p 3000:3000 hebrew-greek-tts
+docker run -p 8000:8000 hebrew-greek-tts
 
 # Testar
-curl http://localhost:3000/health
+curl http://localhost:8000/health
 ```
 
 ### Execução Local
@@ -41,17 +41,17 @@ curl http://localhost:3000/health
 pip install -r requirements.txt
 
 # Executar API
-python -m uvicorn app.multi_model_api:app --host 0.0.0.0 --port 3000
+python -m uvicorn app.multi_model_api:app --host 0.0.0.0 --port 8000
 
 # Documentação interativa
-open http://localhost:3000/docs
+open http://localhost:8000/docs
 ```
 
 ## 📚 **Exemplos de Uso**
 
 ### Hebraico
 ```bash
-curl -X POST "http://localhost:3000/speak" \
+curl -X POST "http://localhost:8000/speak" \
      -H "Content-Type: application/x-www-form-urlencoded" \
      -d "text=שלום עולם, איך אתה היום?&lang=heb&model=hebrew" \
      --output hebrew_audio.mp3
@@ -59,7 +59,7 @@ curl -X POST "http://localhost:3000/speak" \
 
 ### Grego  
 ```bash
-curl -X POST "http://localhost:3000/speak" \
+curl -X POST "http://localhost:8000/speak" \
      -H "Content-Type: application/x-www-form-urlencoded" \
      -d "text=Γεια σας, πώς είστε σήμερα;&lang=ell&model=greek" \
      --output greek_audio.mp3
@@ -67,7 +67,7 @@ curl -X POST "http://localhost:3000/speak" \
 
 ### Auto-detecção de Modelo
 ```bash
-curl -X POST "http://localhost:3000/speak" \
+curl -X POST "http://localhost:8000/speak" \
      -H "Content-Type: application/x-www-form-urlencoded" \
      -d "text=שלום עולם&lang=heb" \
      --output auto_hebrew.mp3
@@ -128,7 +128,7 @@ python test_hebrew_greek.py
 ```bash
 python -c "
 import requests
-response = requests.post('http://localhost:3000/speak', 
+response = requests.post('http://localhost:8000/speak', 
     data={'text': 'שלום עולם', 'lang': 'heb'})
 with open('test_hebrew.mp3', 'wb') as f:
     f.write(response.content)
@@ -140,7 +140,7 @@ print('✅ Áudio em hebraico gerado: test_hebrew.mp3')
 ```bash
 python -c "
 import requests  
-response = requests.post('http://localhost:3000/speak',
+response = requests.post('http://localhost:8000/speak',
     data={'text': 'Γεια σας', 'lang': 'ell'})
 with open('test_greek.mp3', 'wb') as f:
     f.write(response.content)

@@ -15,7 +15,7 @@ Os modelos `facebook/mms-tts-heb` e `facebook/mms-tts-ell` têm **limitações**
 
 #### 🎤 Voz Natural (Padrão)
 ```bash
-curl -X POST "http://localhost:3000/speak" \
+curl -X POST "http://localhost:8000/speak" \
      -H "Content-Type: application/x-www-form-urlencoded" \
      -d "text=שלום עולם&lang=heb&preset=natural" \
      --output hebrew_natural.mp3
@@ -23,7 +23,7 @@ curl -X POST "http://localhost:3000/speak" \
 
 #### 🐌 Voz Lenta (Para Aprendizado)
 ```bash
-curl -X POST "http://localhost:3000/speak" \
+curl -X POST "http://localhost:8000/speak" \
      -H "Content-Type: application/x-www-form-urlencoded" \
      -d "text=Γεια σας&lang=ell&preset=slow" \
      --output greek_slow.mp3
@@ -31,7 +31,7 @@ curl -X POST "http://localhost:3000/speak" \
 
 #### 🏃 Voz Rápida
 ```bash
-curl -X POST "http://localhost:3000/speak" \
+curl -X POST "http://localhost:8000/speak" \
      -H "Content-Type: application/x-www-form-urlencoded" \
      -d "text=שלום עולם&lang=heb&preset=fast" \
      --output hebrew_fast.mp3
@@ -40,7 +40,7 @@ curl -X POST "http://localhost:3000/speak" \
 ### 2. **Configuração Manual de Velocidade**
 
 ```bash
-curl -X POST "http://localhost:3000/speak" \
+curl -X POST "http://localhost:8000/speak" \
      -H "Content-Type: application/x-www-form-urlencoded" \
      -d "text=שלום עולם&lang=heb&speed=1.3" \
      --output hebrew_slow_custom.mp3
@@ -49,7 +49,7 @@ curl -X POST "http://localhost:3000/speak" \
 ### 3. **Presets Disponíveis**
 
 ```bash
-curl http://localhost:3000/voice-presets
+curl http://localhost:8000/voice-presets
 ```
 
 **Resposta:**
@@ -81,7 +81,7 @@ curl http://localhost:3000/voice-presets
 Agora você pode testar novamente:
 
 ```bash
-curl -X POST "http://localhost:3000/speak" \
+curl -X POST "http://localhost:8000/speak" \
      -H "Content-Type: application/x-www-form-urlencoded" \
      -d "text=Γεια σας&lang=ell&preset=slow" \
      --output greek_slow.mp3

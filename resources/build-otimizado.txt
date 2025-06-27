@@ -17,4 +17,4 @@ echo "📊 Verificando tamanho da imagem..."
 docker images hebrew-greek-tts:latest
 
 echo "🚀 Para executar:"
-echo "docker run -p 3000:3000 --name hebrew-greek-tts hebrew-greek-tts:latest"
+echo "docker run -p 8000:8000 --name hebrew-greek-tts hebrew-greek-tts:latest"

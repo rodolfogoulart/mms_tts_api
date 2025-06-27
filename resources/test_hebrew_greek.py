@@ -7,7 +7,7 @@ import json
 import time
 
 def test_hebrew_greek_api():
-    base_url = "http://localhost:3000"
+    base_url = "http://localhost:8000"
     
     print("🇮🇱🇬🇷 Testando API de TTS para Hebraico e Grego\n")
     
@@ -25,7 +25,7 @@ def test_hebrew_greek_api():
             return False
     except:
         print("❌ Erro: API não está rodando")
-        print("Execute: python -m uvicorn app.multi_model_api:app --host 0.0.0.0 --port 3000")
+        print("Execute: python -m uvicorn app.multi_model_api:app --host 0.0.0.0 --port 8000")
         return False
     
     # 2. Listar modelos disponíveis
@@ -147,7 +147,7 @@ def test_hebrew_greek_api():
 
 def test_error_cases():
     """Testa casos de erro esperados"""
-    base_url = "http://localhost:3000"
+    base_url = "http://localhost:8000"
     
     print("\n🧪 Testando casos de erro:")
     
@@ -201,12 +201,12 @@ def show_usage_examples():
         {
             "language": "Hebraico",
             "flag": "🇮🇱",
-            "curl": """curl -X POST "http://localhost:3000/speak" \\
+            "curl": """curl -X POST "http://localhost:8000/speak" \\
      -H "Content-Type: application/x-www-form-urlencoded" \\
      -d "text=שלום עולם&lang=heb" \\
      --output hebrew.mp3""",
             "python": """import requests
-response = requests.post('http://localhost:3000/speak', 
+response = requests.post('http://localhost:8000/speak', 
     data={'text': 'שלום עולם', 'lang': 'heb'})
 with open('hebrew.mp3', 'wb') as f:
     f.write(response.content)"""
@@ -214,12 +214,12 @@ with open('hebrew.mp3', 'wb') as f:
         {
             "language": "Grego",
             "flag": "🇬🇷", 
-            "curl": """curl -X POST "http://localhost:3000/speak" \\
+            "curl": """curl -X POST "http://localhost:8000/speak" \\
      -H "Content-Type: application/x-www-form-urlencoded" \\
      -d "text=Γεια σας&lang=ell" \\
      --output greek.mp3""",
             "python": """import requests
-response = requests.post('http://localhost:3000/speak',
+response = requests.post('http://localhost:8000/speak',
     data={'text': 'Γεια σας', 'lang': 'ell'})
 with open('greek.mp3', 'wb') as f:
     f.write(response.content)"""
@@ -262,5 +262,5 @@ if __name__ == "__main__":
     else:
         print("⚠️  Alguns testes falharam. Verifique os logs acima.")
         
-    print("\n📚 Documentação da API: http://localhost:3000/docs")
-    print("🏠 Homepage da API: http://localhost:3000/")
+    print("\n📚 Documentação da API: http://localhost:8000/docs")
+    print("🏠 Homepage da API: http://localhost:8000/")

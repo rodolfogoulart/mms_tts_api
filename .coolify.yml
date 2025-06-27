@@ -5,14 +5,14 @@ description: "Hebrew & Greek TTS API optimized for production"
 services:
   - name: hebrew-greek-tts
     image: hebrew-greek-tts:latest
-    port: 3000
+    port: 8000
     healthcheck: "/health"
     
 environments:
   production:
     variables:
       LOG_LEVEL: "info"
-      PORT: "3000"
+      PORT: "8000"
       WORKERS: "1"
     domains:
       - "your-domain.com"  # Substitua pelo seu domínio

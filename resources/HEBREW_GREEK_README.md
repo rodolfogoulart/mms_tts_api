@@ -28,10 +28,10 @@ docker build -t hebrew-greek-tts .
 docker-compose up --build
 
 # Executar API
-docker run -p 3000:3000 hebrew-greek-tts
+docker run -p 8000:8000 hebrew-greek-tts
 
 # Testar
-curl http://localhost:3000/health
+curl http://localhost:8000/health
 ```
 
 ### Execução Local
@@ -41,10 +41,10 @@ curl http://localhost:3000/health
 pip install -r requirements.txt
 
 # Executar API
-python -m uvicorn app.multi_model_api:app --host 0.0.0.0 --port 3000
+python -m uvicorn app.multi_model_api:app --host 0.0.0.0 --port 8000
 
 # Documentação interativa
-open http://localhost:3000/docs
+open http://localhost:8000/docs
 ```
 
 ## 📚 **Exemplos de Uso**
@@ -52,13 +52,13 @@ open http://localhost:3000/docs
 ### 🇮🇱 Hebraico
 ```bash
 # Exemplo básico
-curl -X POST "http://localhost:3000/speak" \
+curl -X POST "http://localhost:8000/speak" \
      -H "Content-Type: application/x-www-form-urlencoded" \
      -d "text=שלום עולם, איך אתה היום?&lang=heb" \
      --output hebrew_greeting.mp3
 
 # Com modelo específico
-curl -X POST "http://localhost:3000/speak" \
+curl -X POST "http://localhost:8000/speak" \
      -d "text=ברוך השם לעולם ועד&lang=heb&model=hebrew" \
      --output hebrew_blessing.mp3
 ```
@@ -66,13 +66,13 @@ curl -X POST "http://localhost:3000/speak" \
 ### 🇬🇷 Grego
 ```bash
 # Exemplo básico  
-curl -X POST "http://localhost:3000/speak" \
+curl -X POST "http://localhost:8000/speak" \
      -H "Content-Type: application/x-www-form-urlencoded" \
      -d "text=Γεια σας, πώς είστε σήμερα;&lang=ell" \
      --output greek_greeting.mp3
 
 # Filosofia grega
-curl -X POST "http://localhost:3000/speak" \
+curl -X POST "http://localhost:8000/speak" \
      -d "text=Γνώθι σεαυτόν&lang=ell&model=greek" \
      --output greek_philosophy.mp3
 ```
@@ -83,13 +83,13 @@ curl -X POST "http://localhost:3000/speak" \
 import requests
 
 # Hebraico
-response = requests.post('http://localhost:3000/speak', 
+response = requests.post('http://localhost:8000/speak', 
     data={'text': 'שלום עולם', 'lang': 'heb'})
 with open('hebrew.mp3', 'wb') as f:
     f.write(response.content)
 
 # Grego
-response = requests.post('http://localhost:3000/speak',
+response = requests.post('http://localhost:8000/speak',
     data={'text': 'Γεια σας', 'lang': 'ell'}) 
 with open('greek.mp3', 'wb') as f:
     f.write(response.content)
@@ -164,7 +164,7 @@ python test_hebrew_greek.py
 ```bash
 python -c "
 import requests
-response = requests.post('http://localhost:3000/speak', 
+response = requests.post('http://localhost:8000/speak', 
     data={'text': 'שלום עולם', 'lang': 'heb'})
 with open('test_hebrew.mp3', 'wb') as f:
     f.write(response.content)
@@ -176,7 +176,7 @@ print('✅ Áudio em hebraico: test_hebrew.mp3')
 ```bash
 python -c "
 import requests  
-response = requests.post('http://localhost:3000/speak',
+response = requests.post('http://localhost:8000/speak',
     data={'text': 'Γεια σας', 'lang': 'ell'})
 with open('test_greek.mp3', 'wb') as f:
     f.write(response.content)
@@ -226,7 +226,7 @@ Os modelos são baixados automaticamente na primeira execução:
 ### Docker com GPU
 ```dockerfile
 # Para usar GPU no Docker
-docker run --gpus all -p 3000:3000 hebrew-greek-tts
+docker run --gpus all -p 8000:8000 hebrew-greek-tts
 ```
 
 ## 🐛 **Solução de Problemas**
@@ -247,7 +247,7 @@ python -c "print('שלום עולם'); print('Γεια σας')"
 ### API não responde
 ```bash
 # Verificar se está rodando
-curl http://localhost:3000/health
+curl http://localhost:8000/health
 
 # Logs do Docker
 docker logs <container_id>
@@ -304,4 +304,4 @@ Agora você tem uma API dedicada para:
 - ✅ **Testes automatizados**
 - ✅ **Documentação completa**
 
-**Comece agora**: `docker run -p 3000:3000 hebrew-greek-tts` 🚀
+**Comece agora**: `docker run -p 8000:8000 hebrew-greek-tts` 🚀
