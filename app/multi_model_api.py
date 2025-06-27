@@ -1,7 +1,26 @@
+# ============================================
+# IMPORTS PRINCIPAIS
+# ============================================
 from fastapi import FastAPI, Form, HTTPException, Depends, Request
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+
+# Imports para TTS
+from transformers import VitsModel, AutoTokenizer
+from accelerate import Accelerator
+from scipy.io.wavfile import write
+from pydub import AudioSegment
+
+# Imports padrão Python
+import torch
+import numpy as np
+import os
+import uuid
+import logging
+import time
+from datetime import datetime
 
 # Importar sistema de autenticação
 from .auth import (
@@ -11,7 +30,8 @@ from .auth import (
     create_access_token,
     revoke_token,
     AuthenticationError,
-    PermissionError
+    PermissionError,
+    ACCESS_TOKEN_EXPIRE_MINUTES
 )
 from .database import db_manager
 
@@ -21,13 +41,27 @@ try:
 except ImportError:
     monitoring_router = None
 
+# ============================================
+# CONFIGURAÇÃO DA APLICAÇÃO
+# ============================================
 app = FastAPI(
     title="Hebrew & Greek TTS API (Authenticated)", 
     description="API especializada em TTS para Hebraico e Grego usando MMS-TTS com autenticação",
     version="2.1.0"
 )
 
-# CORS middleware (configure conforme necessário)
+# ============================================
+# MIDDLEWARES (ORDEM IMPORTANTE!)
+# ============================================
+
+# 1. GZip Middleware (deve ser adicionado PRIMEIRO)
+app.add_middleware(
+    GZipMiddleware, 
+    minimum_size=1000,  # Compactar apenas responses > 1KB
+    compresslevel=6     # Nível de compressão (1-9, 6 é bom equilíbrio)
+)
+
+# 2. CORS Middleware (depois do GZip)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Configure adequadamente em produção
@@ -45,7 +79,9 @@ if monitoring_router:
         dependencies=[Depends(get_admin_user)]  # Apenas admins
     )
 
-# Configuração de logging
+# ============================================
+# CONFIGURAÇÃO DE LOGGING
+# ============================================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -93,12 +129,6 @@ MODEL_CONFIG = {
         "type": "mms",
         "supported_languages": {"ell": "Greek"}
     },
-    # "english": {
-    #     "name": "MMS-TTS English",
-    #     "model_id": "facebook/mms-tts-eng",
-    #     "type": "mms",
-    #     "supported_languages": {"eng": "English"}
-    # },
     "portuguese": {
         "name": "MMS-TTS Portuguese",
         "model_id": "facebook/mms-tts-por",
@@ -635,4 +665,9 @@ def get_system_info(admin_user: dict = Depends(get_admin_user)):
             "jwt_expire_minutes": ACCESS_TOKEN_EXPIRE_MINUTES
         }
     }
+
+# Manter o código existente para desenvolvimento local
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 

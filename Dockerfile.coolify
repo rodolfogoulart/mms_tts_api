@@ -14,7 +14,7 @@ WORKDIR /build
 
 # Clonar repositório completo
 ARG REPO_URL=https://github.com/rodolfogoulart/mms_tts_api.git
-ARG BRANCH=coolify
+ARG BRANCH=auth
 RUN git clone --depth 1 --branch ${BRANCH} ${REPO_URL} ./repo
 
 # Criar ambiente virtual

@@ -17,6 +17,18 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY", "hebrew-greek-tts-secret-key-change-in-
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("TOKEN_EXPIRE_MINUTES", "60"))
 
+# Exportar para que outros módulos possam usar
+__all__ = [
+    'get_current_active_user',
+    'get_admin_user', 
+    'get_rate_limited_user',
+    'create_access_token',
+    'revoke_token',
+    'AuthenticationError',
+    'PermissionError',
+    'ACCESS_TOKEN_EXPIRE_MINUTES'  # Adicionar à exportação
+]
+
 # Esquemas de segurança
 security_bearer = HTTPBearer(auto_error=False)
 security_api_key = APIKeyHeader(name="X-API-Key", auto_error=False)
