@@ -10,7 +10,16 @@ import os
 import uuid
 import logging
 
+
+# Importar o router de monitoring
+from .monitoring import router as monitoring_router
+
 app = FastAPI(title="Hebrew & Greek TTS API", description="API especializada em TTS para Hebraico e Grego usando MMS-TTS")
+
+# Incluir as rotas de monitoring
+# app.include_router(monitoring_router, prefix="/monitoring", tags=["monitoring"])
+# Alternativamente, sem prefix para manter as rotas no nível raiz:
+app.include_router(monitoring_router, tags=["monitoring"])
 
 # Configuração de logging
 logging.basicConfig(level=logging.INFO)
@@ -59,7 +68,19 @@ MODEL_CONFIG = {
         "model_id": "facebook/mms-tts-ell",
         "type": "mms",
         "supported_languages": {"ell": "Greek"}
-    }
+    },
+    # "english": {
+    #     "name": "MMS-TTS English",
+    #     "model_id": "facebook/mms-tts-eng",
+    #     "type": "mms",
+    #     "supported_languages": {"eng": "English"}
+    # },
+    # "portuguese": {
+    #     "name": "MMS-TTS Portuguese",
+    #     "model_id": "facebook/mms-tts-por",
+    #     "type": "mms",
+    #     "supported_languages": {"por": "Portuguese"}
+    # },
 }
 
 # Presets de voz (simplificados para MMS-TTS)

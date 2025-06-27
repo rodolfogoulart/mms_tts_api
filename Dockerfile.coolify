@@ -1,0 +1,94 @@
+FROM python:3.10-slim AS builder
+
+# Instalar dependências de build + Git
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Definir diretório de trabalho
+WORKDIR /build
+
+# Clonar repositório completo
+ARG REPO_URL=https://github.com/rodolfogoulart/mms_tts_api.git
+ARG BRANCH=coolify
+RUN git clone --depth 1 --branch ${BRANCH} ${REPO_URL} ./repo
+
+# Criar ambiente virtual
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Instalar dependências Python do repositório clonado
+RUN cd ./repo && \
+    if [ -f "requirements.txt" ]; then \
+    pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt; \
+    else \
+    pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+    transformers==4.35.2 \
+    torch==2.2.0 \
+    torchaudio==2.2.0 \
+    accelerate==0.25.0 \
+    fastapi==0.104.1 \
+    uvicorn[standard]==0.24.0 \
+    python-multipart==0.0.6 \
+    pydub==0.25.1 \
+    librosa==0.10.1 \
+    scipy==1.11.4 \
+    numpy==1.24.4 \
+    requests==2.31.0 \
+    aiofiles==23.2.1 \
+    soundfile==0.12.1; \
+    fi && \
+    pip cache purge
+
+# ============================================
+# Estágio Final
+# ============================================
+FROM python:3.10-slim
+
+# Instalar runtime essenciais
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copiar ambiente virtual do builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copiar código da aplicação do repositório clonado
+COPY --from=builder /build/repo /app
+
+# Criar usuário não-root
+RUN useradd --create-home --uid 1000 app && \
+    chown -R app:app /app
+
+USER app
+WORKDIR /app
+
+# Criar diretórios necessários
+RUN mkdir -p temp logs .cache/huggingface
+
+# Variáveis de ambiente
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/app/.cache/huggingface \
+    CUDA_VISIBLE_DEVICES="" \
+    OMP_NUM_THREADS=2 \
+    PORT=8000
+
+# Health check
+HEALTHCHECK --interval=60s --timeout=15s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+EXPOSE 8000
+
+# Comando de inicialização
+CMD ["python", "-m", "uvicorn", "app.multi_model_api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
