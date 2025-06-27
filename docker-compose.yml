@@ -5,31 +5,72 @@ services:
     build: 
       context: .
       dockerfile: Dockerfile
+      args:
+        - BUILDKIT_INLINE_CACHE=1
     container_name: hebrew-greek-tts
     ports:
-      - "8000:8000"
+      - "${PORT:-8000}:8000"
     volumes:
-      # Cache persistente para modelos (evita re-download)
+      # Cache persistente otimizado para VPS
       - hf-cache:/home/app/.cache/huggingface
       - transformers-cache:/home/app/.cache/transformers
       - torch-cache:/home/app/.cache/torch
-      # Logs persistentes
+      # Logs para Coolify
       - ./logs:/home/app/logs
     environment:
       - PYTHONUNBUFFERED=1
-      - LOG_LEVEL=info
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PORT=${PORT:-8000}
+      # Otimizações para VPS com recursos limitados
+      - OMP_NUM_THREADS=2
+      - MKL_NUM_THREADS=2
+      - TORCH_NUM_THREADS=2
+      - NUMEXPR_NUM_THREADS=2
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
+      interval: 60s
+      timeout: 15s
       retries: 3
-      start_period: 60s
+      start_period: 120s
+    # Limites de recursos para VPS
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    # Configurações de rede para Coolify
+    networks:
+      - coolify
+    labels:
+      - "coolify.enabled=true"
+      - "coolify.port=8000"
+      - "coolify.healthcheck=/health"
+      - "coolify.name=hebrew-greek-tts"
 
 volumes:
   hf-cache:
     driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/hebrew-greek-tts/cache/huggingface
   transformers-cache:
     driver: local  
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/hebrew-greek-tts/cache/transformers
   torch-cache:
     driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/hebrew-greek-tts/cache/torch
+
+networks:
+  coolify:
+    external: true

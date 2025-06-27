@@ -1,17 +1,23 @@
+# Core ML/AI
 transformers>=4.33.0,<5.0.0
 torch>=2.0.0,<2.2.0
-accelerate>=0.20.0,<0.25.0  # Adicionando accelerate
+accelerate>=0.20.0,<0.25.0
 scipy>=1.10.0,<1.12.0
 numpy>=1.24.0,<1.26.0
 
-# API Framework
+# API Framework com otimizações
 fastapi>=0.100.0,<0.105.0
 uvicorn[standard]>=0.20.0,<0.25.0
 python-multipart>=0.0.6,<0.0.8
+
+# Performance para produção
+uvloop>=0.17.0,<0.20.0  # Event loop mais rápido
+httptools>=0.5.0,<0.7.0  # Parser HTTP mais rápido
+gunicorn>=21.0.0,<22.0.0  # WSGI server alternativo
 
 # Audio Processing
 pydub>=0.25.0,<0.26.0
 librosa>=0.10.0,<0.11.0
 
-# Utilities (apenas se necessário)
-# requests>=2.31.0,<2.32.0  # Remover se não usar
+# Monitoring/Logging para produção
+psutil>=5.9.0,<6.0.0  # Monitoramento de sistema
