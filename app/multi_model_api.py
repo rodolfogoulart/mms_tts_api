@@ -18,7 +18,7 @@ import torch
 import numpy as np
 import os
 import uuid
-import logging
+import logging  # ← IMPORTANTE: Este import estava faltando ou na posição errada
 import time
 from datetime import datetime
 
@@ -40,6 +40,12 @@ try:
     from .monitoring import router as monitoring_router
 except ImportError:
     monitoring_router = None
+
+# ============================================
+# CONFIGURAÇÃO DE LOGGING (LOGO APÓS OS IMPORTS)
+# ============================================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ============================================
 # CONFIGURAÇÃO DA APLICAÇÃO
@@ -78,12 +84,6 @@ if monitoring_router:
         tags=["monitoring"],
         dependencies=[Depends(get_admin_user)]  # Apenas admins
     )
-
-# ============================================
-# CONFIGURAÇÃO DE LOGGING
-# ============================================
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # Verificar se GPU está disponível
 has_cuda = torch.cuda.is_available()
@@ -212,6 +212,8 @@ def initialize_app():
                         logger.info(f"Admin credentials: {result['admin_user']['credentials']}")
                     if "demo_user" in result and "credentials" in result["demo_user"]:
                         logger.info(f"Demo credentials: {result['demo_user']['credentials']}")
+                    if "demo_api_key" in result and "key" in result["demo_api_key"]:
+                        logger.info(f"Demo API Key: {result['demo_api_key']['key']}")
             else:
                 logger.info("Default data already exists or initialization skipped")
         except Exception as e:
@@ -429,15 +431,32 @@ def speak(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
-def health_check(current_user: dict = Depends(get_current_active_user)):
-    """Health check protegido"""
+def health_check():
+    """Health check público (sem autenticação)"""
     return {
-        "status": "ok", 
+        "status": "healthy", 
+        "message": "Hebrew & Greek TTS API is running",
+        "version": "2.1.0",
+        "device": str(device),
+        "loaded_models": list(models.keys()),
+        "supported_languages": ["heb", "ell", "por"],
+        "authentication": "required for protected endpoints"
+    }
+
+@app.get("/health/detailed")
+def health_check_detailed(current_user: dict = Depends(get_current_active_user)):
+    """Health check detalhado (protegido)"""
+    return {
+        "status": "healthy", 
         "message": "Hebrew & Greek TTS API is running (Authenticated)",
         "user": current_user.get("name", "Unknown"),
         "device": str(device),
         "loaded_models": list(models.keys()),
-        "supported_languages": ["heb", "ell", "por"]
+        "supported_languages": ["heb", "ell", "por"],
+        "rate_limit_info": {
+            "current": current_user.get("rate_limit_current", 0),
+            "max": current_user.get("rate_limit_max", 100)
+        }
     }
 
 @app.get("/models")
@@ -593,7 +612,7 @@ def create_api_key(
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/admin/init-default-data")
-def initialize_default_data(admin_user: dict = Depends(get_admin_user)):
+def initialize_default_data_route(admin_user: dict = Depends(get_admin_user)):
     """Inicializa dados padrão com configuração via env vars (apenas admin)"""
     try:
         result = db_manager.initialize_default_data()
@@ -601,14 +620,14 @@ def initialize_default_data(admin_user: dict = Depends(get_admin_user)):
         # Não retornar senhas em produção
         if os.getenv("ENVIRONMENT", "production") == "production":
             # Limpar informações sensíveis
-            if "admin_user" in result and "credentials" in result["admin_user"]:
+            if result and "admin_user" in result and "credentials" in result["admin_user"]:
                 result["admin_user"]["credentials"] = "*** HIDDEN IN PRODUCTION ***"
-            if "demo_user" in result and "credentials" in result["demo_user"]:
+            if result and "demo_user" in result and "credentials" in result["demo_user"]:
                 result["demo_user"]["credentials"] = "*** HIDDEN IN PRODUCTION ***"
-            if "demo_api_key" in result and "key" in result["demo_api_key"]:
+            if result and "demo_api_key" in result and "key" in result["demo_api_key"]:
                 key = result["demo_api_key"]["key"]
                 result["demo_api_key"]["key"] = f"{key[:8]}...{key[-4:]}"
-            if "admin_api_key" in result and "key" in result["admin_api_key"]:
+            if result and "admin_api_key" in result and "key" in result["admin_api_key"]:
                 key = result["admin_api_key"]["key"]
                 result["admin_api_key"]["key"] = f"{key[:8]}...{key[-4:]}"
         
