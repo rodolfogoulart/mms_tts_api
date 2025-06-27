@@ -5,6 +5,7 @@ FROM python:3.10-slim AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
+    git \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -12,8 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Instalar dependências Python com otimizações
+# Copiar requirements primeiro (para cache do Docker)
 COPY requirements.txt .
+
+# Instalar dependências Python com otimizações
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
     && pip install --no-cache-dir -r requirements.txt \
     && pip cache purge
@@ -32,7 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && apt-get autoremove -y
 
-# Copiar ambiente virtual
+# Copiar ambiente virtual do builder
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
@@ -41,7 +44,7 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 app
 USER app
 WORKDIR /home/app
 
-# Copiar código
+# Copiar código da aplicação
 COPY --chown=app:app app/ ./app/
 
 # Criar diretórios necessários
