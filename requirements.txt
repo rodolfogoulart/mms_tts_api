@@ -1,17 +1,28 @@
+# Core ML/AI - Versões atualizadas e compatíveis
 transformers>=4.33.0,<5.0.0
-torch>=2.0.0,<2.2.0
-accelerate>=0.20.0,<0.25.0  # Adicionando accelerate
-scipy>=1.10.0,<1.12.0
-numpy>=1.24.0,<1.26.0
+torch>=2.2.0,<2.8.0
+torchaudio>=2.2.0,<2.8.0
+accelerate>=0.20.0,<0.35.0
+scipy>=1.10.0,<1.15.0
+numpy>=1.24.0,<2.0.0
 
-# API Framework
-fastapi>=0.100.0,<0.105.0
-uvicorn[standard]>=0.20.0,<0.25.0
-python-multipart>=0.0.6,<0.0.8
+# API Framework com otimizações
+fastapi>=0.100.0,<0.115.0
+uvicorn[standard]>=0.20.0,<0.32.0
+python-multipart>=0.0.6,<0.0.10
+
+# Performance para produção
+uvloop>=0.17.0,<0.21.0
+httptools>=0.5.0,<0.7.0
 
 # Audio Processing
 pydub>=0.25.0,<0.26.0
 librosa>=0.10.0,<0.11.0
+soundfile>=0.12.0,<0.13.0
 
-# Utilities (apenas se necessário)
-# requests>=2.31.0,<2.32.0  # Remover se não usar
+# Utilidades
+requests>=2.28.0,<3.0.0
+aiofiles>=22.0.0,<25.0.0
+
+# Monitoramento (opcional para produção)
+psutil>=5.9.0,<6.0.0
