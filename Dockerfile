@@ -1,89 +1,66 @@
-# Multi-stage build otimizado para Coolify/VPS
+# Build ultra-otimizado para VPS com recursos limitados
 FROM python:3.10-slim AS builder
 
-# Instalar dependências de build
+# Instalar apenas o essencial para build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    pkg-config \
-    git \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
+    && rm -rf /var/lib/apt/lists/*
 
 # Criar ambiente virtual
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copiar requirements primeiro (para cache do Docker)
+# Instalar dependências com limites de memória
 COPY requirements.txt .
-
-# Instalar dependências Python com otimizações
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir -r requirements.txt \
-    && pip cache purge
+RUN pip install --no-cache-dir --no-deps -r requirements.txt || \
+    pip install --no-cache-dir --no-build-isolation -r requirements.txt
 
 # ============================================
-# Estágio final - Produção
+# Estágio final - Produção Ultra-Leve
 # ============================================
 FROM python:3.10-slim
 
-# Instalar apenas runtime essenciais + otimizações para VPS
+# Instalar apenas o mínimo necessário
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
-    ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean \
-    && apt-get autoremove -y
+    && apt-get clean
 
-# Copiar ambiente virtual do builder
+# Copiar ambiente virtual
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Criar usuário não-root
-RUN useradd --create-home --shell /bin/bash --uid 1000 app
+# Usuário não-root
+RUN useradd --create-home --uid 1000 app
 USER app
 WORKDIR /home/app
 
-# Copiar código da aplicação
+# Copiar código
 COPY --chown=app:app app/ ./app/
 
-# Criar diretórios necessários
-RUN mkdir -p temp logs .cache/huggingface .cache/transformers .cache/torch
+# Diretórios mínimos
+RUN mkdir -p temp .cache/huggingface
 
-# Variáveis otimizadas para VPS/Coolify
+# Variáveis ultra-otimizadas para VPS limitado
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONIOENCODING=utf-8 \
     HF_HOME=/home/app/.cache/huggingface \
-    TRANSFORMERS_CACHE=/home/app/.cache/transformers \
-    TORCH_HOME=/home/app/.cache/torch \
     CUDA_VISIBLE_DEVICES="" \
-    OMP_NUM_THREADS=2 \
-    MKL_NUM_THREADS=2 \
-    NUMEXPR_NUM_THREADS=2
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    NUMEXPR_NUM_THREADS=1 \
+    TORCH_NUM_THREADS=1
 
-# Health check otimizado
-HEALTHCHECK --interval=60s --timeout=15s --start-period=120s --retries=3 \
+# Health check simples
+HEALTHCHECK --interval=120s --timeout=30s --start-period=180s --retries=2 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 EXPOSE 8000
 
-# Comando otimizado para produção
+# Comando mínimo
 CMD ["uvicorn", "app.multi_model_api:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
      "--workers", "1", \
-     "--worker-class", "uvicorn.workers.UvicornWorker", \
-     "--access-log", \
-     "--log-level", "info", \
-     "--loop", "uvloop", \
-     "--http", "httptools"]
-
-# Labels para Coolify
-LABEL org.opencontainers.image.title="Hebrew-Greek TTS API" \
-      org.opencontainers.image.description="Lightweight Hebrew & Greek TTS API using MMS-TTS models" \
-      org.opencontainers.image.version="2.1" \
-      org.opencontainers.image.source="https://github.com/rodolfogoulart/mms_tts_api" \
-      coolify.enabled="true" \
-      coolify.port="8000" \
-      coolify.healthcheck="/health"
+     "--log-level", "warning"]
