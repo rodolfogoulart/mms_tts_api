@@ -26,3 +26,8 @@ aiofiles>=22.0.0,<25.0.0
 
 # Monitoramento (opcional para produção)
 psutil>=5.9.0,<6.0.0
+
+# Segurança e Autenticação
+PyJWT==2.8.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
