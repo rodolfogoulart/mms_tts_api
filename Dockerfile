@@ -51,13 +51,13 @@ ENV PYTHONUNBUFFERED=1 \
     MKL_NUM_THREADS=1 \
     NUMEXPR_NUM_THREADS=1 \
     TORCH_NUM_THREADS=1 \
-    PORT=8000
+    PORT=3000
 
 # Health check simples
 HEALTHCHECK --interval=120s --timeout=30s --start-period=180s --retries=2 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:3000/health || exit 1
 
-EXPOSE 8000
+EXPOSE 3000
 
 # Comando corrigido com sintaxe adequada
-CMD ["python", "-m", "uvicorn", "app.multi_model_api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--log-level", "warning"]
+CMD ["python", "-m", "uvicorn", "app.multi_model_api:app", "--host", "0.0.0.0", "--port", "3000", "--workers", "1", "--log-level", "warning"]
