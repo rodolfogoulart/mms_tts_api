@@ -206,13 +206,3 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 - **Este projeto**: MIT
 
 ---
-
-## 🎉 **Sucesso!**
-
-Agora você tem uma API especializada que suporta:
-✅ **Hebraico** com modelo MMS-TTS nativo  
-✅ **Grego** com modelo MMS-TTS nativo  
-✅ **Auto-detecção** de idioma  
-✅ **API REST** profissional  
-✅ **Docker** para deploy fácil  
-✅ **Performance otimizada** com modelos leves
