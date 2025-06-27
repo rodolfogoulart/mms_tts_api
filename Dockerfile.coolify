@@ -84,7 +84,6 @@ VOLUME ["/app/data"]
 
 # ============================================
 # VARIÁVEIS DE AMBIENTE PADRÃO
-# (Aparecerão automaticamente no Coolify)
 # ============================================
 
 # Configurações básicas da aplicação
@@ -96,7 +95,7 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8000
 
 # Configurações de segurança JWT
-ENV JWT_SECRET_KEY="hebrew-greek-tts-secret-key-CHANGE-IN-PRODUCTION" \
+ENV JWT_SECRET_KEY="your-super-secret-jwt-key-change-in-production-12345" \
     TOKEN_EXPIRE_MINUTES=60 \
     ALGORITHM=HS256
 
@@ -108,62 +107,41 @@ ENV AUTO_INIT_DEFAULT_DATA=true \
     CREATE_DEFAULT_USERS=true \
     ENVIRONMENT=production
 
-# ============================================
-# USUÁRIOS PADRÃO (CUSTOMIZE NO COOLIFY)
-# ============================================
-
 # Usuário Administrador
 ENV ADMIN_USERNAME="admin" \
-    ADMIN_PASSWORD="SecureAdminPass123!" \
-    ADMIN_EMAIL="admin@yourdomain.com" \
+    ADMIN_PASSWORD="yourPassword" \
+    ADMIN_EMAIL="youremail@email.com" \
     ADMIN_RATE_LIMIT=1000
 
 # Usuário Demo
 ENV DEMO_USERNAME="demo" \
-    DEMO_PASSWORD="DemoPass123!" \
-    DEMO_EMAIL="demo@yourdomain.com" \
+    DEMO_PASSWORD="yourPassword" \
+    DEMO_EMAIL="youremail@email.com" \
     DEMO_RATE_LIMIT=100
-
-# ============================================
-# CONFIGURAÇÕES DE API KEYS
-# ============================================
 
 # API Keys padrão
 ENV CREATE_DEMO_API_KEY=true \
     CREATE_ADMIN_API_KEY=false \
     DEMO_API_KEY_NAME="Demo API Key" \
-    DEMO_API_KEY_RATE_LIMIT=50 \
-    ADMIN_API_KEY_NAME="Admin API Key" \
-    ADMIN_API_KEY_RATE_LIMIT=1000
+    DEMO_API_KEY_RATE_LIMIT=50
 
-# ============================================
-# CONFIGURAÇÕES AVANÇADAS
-# ============================================
-
-# Rate limiting
-ENV RATE_LIMIT_WINDOW_MINUTES=60
-
-# Logging
-ENV LOG_LEVEL=INFO \
-    LOG_FORMAT="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-
-# Performance
-ENV MAX_WORKERS=1 \
+# Configurações avançadas
+ENV RATE_LIMIT_WINDOW_MINUTES=60 \
+    LOG_LEVEL=INFO \
+    MAX_WORKERS=1 \
     WORKER_TIMEOUT=300
 
-# Health check
+# Health check (endpoint público)
 HEALTHCHECK --interval=60s --timeout=15s --start-period=120s --retries=6 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 EXPOSE 8000
 
-# Labels para documentação no Coolify
+# Labels para documentação
 LABEL org.opencontainers.image.title="Hebrew & Greek TTS API" \
       org.opencontainers.image.description="Authenticated TTS API for Hebrew, Greek and Portuguese using MMS-TTS" \
       org.opencontainers.image.version="2.1.0" \
-      org.opencontainers.image.source="https://github.com/rodolfogoulart/mms_tts_api" \
-      org.opencontainers.image.documentation="https://github.com/rodolfogoulart/mms_tts_api/blob/coolify/README.md" \
-      coolify.env.description="Hebrew & Greek TTS API with Authentication"
+      org.opencontainers.image.source="https://github.com/rodolfogoulart/mms_tts_api"
 
 # Comando de inicialização
 CMD ["python", "-m", "uvicorn", "app.multi_model_api:app", \
