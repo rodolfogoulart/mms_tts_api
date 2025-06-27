@@ -12,8 +12,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Instalar dependências com limites de memória
 COPY requirements.txt .
-RUN pip install --no-cache-dir --no-deps -r requirements.txt || \
-    pip install --no-cache-dir --no-build-isolation -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
 
 # ============================================
 # Estágio final - Produção Ultra-Leve
@@ -50,7 +50,8 @@ ENV PYTHONUNBUFFERED=1 \
     OMP_NUM_THREADS=1 \
     MKL_NUM_THREADS=1 \
     NUMEXPR_NUM_THREADS=1 \
-    TORCH_NUM_THREADS=1
+    TORCH_NUM_THREADS=1 \
+    PORT=8000
 
 # Health check simples
 HEALTHCHECK --interval=120s --timeout=30s --start-period=180s --retries=2 \
@@ -58,9 +59,5 @@ HEALTHCHECK --interval=120s --timeout=30s --start-period=180s --retries=2 \
 
 EXPOSE 8000
 
-# Comando mínimo
-CMD ["uvicorn", "app.multi_model_api:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8000", \
-     "--workers", "1", \
-     "--log-level", "warning"]
+# Comando corrigido com sintaxe adequada
+CMD ["python", "-m", "uvicorn", "app.multi_model_api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--log-level", "warning"]
