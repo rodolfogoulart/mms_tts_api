@@ -1,4 +1,8 @@
-# Core ML/AI - Versões atualizadas e compatíveis
+# ============================================
+# DEPENDÊNCIAS PRINCIPAIS
+# ============================================
+
+# Transformers e modelos de ML
 transformers>=4.33.0,<5.0.0
 torch>=2.2.0,<2.8.0
 torchaudio>=2.2.0,<2.8.0
@@ -6,23 +10,31 @@ accelerate>=0.20.0,<0.35.0
 scipy>=1.10.0,<1.15.0
 numpy>=1.24.0,<2.0.0
 
-# API Framework com otimizações
+# API Framework
 fastapi>=0.100.0,<0.115.0
 uvicorn[standard]>=0.20.0,<0.32.0
 python-multipart>=0.0.6,<0.0.10
 
-# Performance para produção
+# Otimização de performance
 uvloop>=0.17.0,<0.21.0
 httptools>=0.5.0,<0.7.0
 
-# Audio Processing
+# Processamento de áudio
 pydub>=0.25.0,<0.26.0
 librosa>=0.10.0,<0.11.0
 soundfile>=0.12.0,<0.13.0
 
-# Utilidades
+# Utilitários gerais
 requests>=2.28.0,<3.0.0
 aiofiles>=22.0.0,<25.0.0
 
-# Monitoramento (opcional para produção)
+# Monitoramento e recursos do sistema
 psutil>=5.9.0,<6.0.0
+
+# Autenticação e Segurança
+PyJWT==2.8.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Agendamento de tarefas
+apscheduler>=3.10.0,<4.0.0

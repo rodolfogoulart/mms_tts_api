@@ -40,8 +40,11 @@ WORKDIR /home/app
 # Copiar apenas o código necessário
 COPY --chown=app:app app/ ./app/
 
-# Criar diretórios com permissões corretas
-RUN mkdir -p temp logs
+# Criar diretórios necessários (incluir data)
+RUN mkdir -p temp logs .cache/huggingface data
+
+# Volume para persistir banco de dados
+VOLUME ["/app/data"]
 
 # Variáveis de ambiente para otimização
 ENV PYTHONUNBUFFERED=1 \

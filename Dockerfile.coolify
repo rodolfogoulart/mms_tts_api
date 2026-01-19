@@ -14,7 +14,7 @@ WORKDIR /build
 
 # Clonar repositório completo
 ARG REPO_URL=https://github.com/rodolfogoulart/mms_tts_api.git
-ARG BRANCH=coolify
+ARG BRANCH=auth
 RUN git clone --depth 1 --branch ${BRANCH} ${REPO_URL} ./repo
 
 # Criar ambiente virtual
@@ -24,25 +24,28 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Instalar dependências Python do repositório clonado
 RUN cd ./repo && \
     if [ -f "requirements.txt" ]; then \
-    pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r requirements.txt; \
+        pip install --no-cache-dir --upgrade pip setuptools wheel && \
+        pip install --no-cache-dir -r requirements.txt; \
     else \
-    pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
-    transformers==4.35.2 \
-    torch==2.2.0 \
-    torchaudio==2.2.0 \
-    accelerate==0.25.0 \
-    fastapi==0.104.1 \
-    uvicorn[standard]==0.24.0 \
-    python-multipart==0.0.6 \
-    pydub==0.25.1 \
-    librosa==0.10.1 \
-    scipy==1.11.4 \
-    numpy==1.24.4 \
-    requests==2.31.0 \
-    aiofiles==23.2.1 \
-    soundfile==0.12.1; \
+        pip install --no-cache-dir --upgrade pip && \
+        pip install --no-cache-dir \
+            transformers==4.35.2 \
+            torch==2.2.0 \
+            torchaudio==2.2.0 \
+            accelerate==0.25.0 \
+            fastapi==0.104.1 \
+            uvicorn[standard]==0.24.0 \
+            python-multipart==0.0.6 \
+            pydub==0.25.1 \
+            librosa==0.10.1 \
+            scipy==1.11.4 \
+            numpy==1.24.4 \
+            requests==2.31.0 \
+            aiofiles==23.2.1 \
+            soundfile==0.12.1 \
+            PyJWT==2.8.0 \
+            python-jose[cryptography]==3.3.0 \
+            passlib[bcrypt]==1.7.4; \
     fi && \
     pip cache purge
 
@@ -73,10 +76,17 @@ RUN useradd --create-home --uid 1000 app && \
 USER app
 WORKDIR /app
 
-# Criar diretórios necessários
-RUN mkdir -p temp logs .cache/huggingface
+# Criar diretórios necessários (incluir data)
+RUN mkdir -p temp logs .cache/huggingface data
 
-# Variáveis de ambiente
+# Volume para persistir banco de dados
+VOLUME ["/app/data"]
+
+# ============================================
+# VARIÁVEIS DE AMBIENTE PADRÃO
+# ============================================
+
+# Configurações básicas da aplicação
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache/huggingface \
@@ -84,11 +94,58 @@ ENV PYTHONUNBUFFERED=1 \
     OMP_NUM_THREADS=2 \
     PORT=8000
 
-# Health check
-HEALTHCHECK --interval=60s --timeout=15s --start-period=60s --retries=6 \
+# Configurações de segurança JWT
+ENV JWT_SECRET_KEY="your-super-secret-jwt-key-change-in-production-12345" \
+    TOKEN_EXPIRE_MINUTES=60 \
+    ALGORITHM=HS256
+
+# Configurações do banco de dados
+ENV DATABASE_PATH="/app/data/tts_auth.db"
+
+# Configurações de inicialização
+ENV AUTO_INIT_DEFAULT_DATA=true \
+    CREATE_DEFAULT_USERS=true \
+    ENVIRONMENT=production
+
+# Usuário Administrador
+ENV ADMIN_USERNAME="admin" \
+    ADMIN_PASSWORD="yourPassword" \
+    ADMIN_EMAIL="youremail@email.com" \
+    ADMIN_RATE_LIMIT=1000
+
+# Usuário Demo
+ENV DEMO_USERNAME="demo" \
+    DEMO_PASSWORD="yourPassword" \
+    DEMO_EMAIL="youremail@email.com" \
+    DEMO_RATE_LIMIT=100
+
+# API Keys padrão
+ENV CREATE_DEMO_API_KEY=true \
+    CREATE_ADMIN_API_KEY=false \
+    DEMO_API_KEY_NAME="Demo API Key" \
+    DEMO_API_KEY_RATE_LIMIT=50
+
+# Configurações avançadas
+ENV RATE_LIMIT_WINDOW_MINUTES=60 \
+    LOG_LEVEL=INFO \
+    MAX_WORKERS=1 \
+    WORKER_TIMEOUT=300
+
+# Health check (endpoint público)
+HEALTHCHECK --interval=60s --timeout=15s --start-period=120s --retries=6 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 EXPOSE 8000
 
+# Labels para documentação
+LABEL org.opencontainers.image.title="Hebrew & Greek TTS API" \
+      org.opencontainers.image.description="Authenticated TTS API for Hebrew, Greek and Portuguese using MMS-TTS" \
+      org.opencontainers.image.version="2.1.0" \
+      org.opencontainers.image.source="https://github.com/rodolfogoulart/mms_tts_api"
+
 # Comando de inicialização
-CMD ["python", "-m", "uvicorn", "app.multi_model_api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["python", "-m", "uvicorn", "app.multi_model_api:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "1", \
+     "--log-level", "info"]
