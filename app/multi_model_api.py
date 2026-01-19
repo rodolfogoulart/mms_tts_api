@@ -1,11 +1,12 @@
 # ============================================
 # IMPORTS PRINCIPAIS
 # ============================================
-from fastapi import FastAPI, Form, HTTPException, Depends, Request
+from fastapi import FastAPI, Form, HTTPException, Depends, Request, BackgroundTasks
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from apscheduler.schedulers.background import BackgroundScheduler
 
 # Imports para TTS
 from transformers import VitsModel, AutoTokenizer
@@ -309,6 +310,7 @@ def root():
 
 @app.post("/speak")
 def speak(
+    background_tasks: BackgroundTasks,
     text: str = Form(...), 
     lang: str = Form(...), 
     model: str = Form(default="auto"),
@@ -319,6 +321,14 @@ def speak(
     """
     Gera áudio com autenticação e rate limiting
     """
+    # Adicionar validação
+    if not text or not text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+    
+    # Limitar tamanho do texto
+    if len(text) > 5000:
+        raise HTTPException(status_code=400, detail="Text too long (max 5000 characters)")
+    
     try:
         logger.info(f"TTS request from user: {current_user.get('name', 'Unknown')} - Text: '{text[:50]}...'")
         
@@ -410,7 +420,10 @@ def speak(
         # Limpar arquivo WAV temporário
         os.remove(wav_path)
         
-        logger.info(f"Generated audio for user {current_user.get('name')}: '{text}' ({lang}) - speed:{final_speed}")
+        logger.info(f"Generated audio for user {current_user.get('name')}: '{text}' ({lang}) - speed:{final_speed} - {config_source}")
+
+        # Agendar remoção do arquivo MP3 após a resposta
+        background_tasks.add_task(os.remove, mp3_path)
         
         return FileResponse(
             mp3_path, 
@@ -502,11 +515,20 @@ def get_voice_presets(current_user: dict = Depends(get_current_active_user)):
 @app.get("/admin/users")
 def list_active_users(admin_user: dict = Depends(get_admin_user)):
     """Lista usuários ativos (apenas admin)"""
-    # Em produção, consultar banco de dados
+    with db_manager.get_connection() as conn:
+        active_sessions = conn.execute(
+            "SELECT COUNT(*) as count FROM sessions WHERE is_revoked = 0 AND expires_at > CURRENT_TIMESTAMP"
+        ).fetchone()["count"]
+        
+        active_users = conn.execute("""
+            SELECT id, username, email, rate_limit, is_admin, created_at, last_login
+            FROM users WHERE is_active = 1
+        """).fetchall()
+    
     return {
-        "active_sessions": len(request_counts),
-        "admin": admin_user.get("name"),
-        "rate_limits": dict(list(request_counts.items())[:10])  # Apenas uma amostra
+        "active_sessions": active_sessions,
+        "active_users": [dict(user) for user in active_users],
+        "admin": admin_user.get("username", admin_user.get("name"))
     }
 
 @app.post("/admin/generate-api-key")
@@ -514,30 +536,37 @@ def generate_api_key(
     name: str = Form(...),
     permissions: str = Form(default="tts,models"),
     rate_limit: int = Form(default=100),
+    expires_days: int = Form(default=None),
     admin_user: dict = Depends(get_admin_user)
 ):
     """Gera nova API key (apenas admin)"""
-    import secrets
-    
-    new_key = f"tts-{secrets.token_urlsafe(32)}"
-    
-    # Em produção, salvar em banco de dados
-    API_KEYS[new_key] = {
-        "name": name,
-        "permissions": permissions.split(","),
-        "rate_limit": rate_limit,
-        "active": True,
-        "created_by": admin_user.get("name"),
-        "created_at": datetime.utcnow().isoformat()
-    }
-    
-    return {
-        "api_key": new_key,
-        "name": name,
-        "permissions": permissions.split(","),
-        "rate_limit": rate_limit,
-        "created_by": admin_user.get("name")
-    }
+    try:
+        permissions_list = [p.strip() for p in permissions.split(",")]
+        created_by = admin_user.get("user_id") if admin_user["type"] == "jwt" else None
+        
+        api_key = db_manager.create_api_key(
+            name=name,
+            permissions=permissions_list,
+            rate_limit=rate_limit,
+            expires_days=expires_days,
+            created_by=created_by
+        )
+        
+        return {
+            "message": f"API key '{name}' created successfully",
+            "api_key": api_key,
+            "name": name,
+            "permissions": permissions_list,
+            "rate_limit": rate_limit,
+            "expires_days": expires_days,
+            "created_by": admin_user.get("username", admin_user.get("name")),
+            "usage": {
+                "header": "X-API-Key",
+                "example": f"curl -H 'X-API-Key: {api_key}' https://your-api.com/speak"
+            }
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/admin/create-user")
 def create_user(
@@ -684,6 +713,42 @@ def get_system_info(admin_user: dict = Depends(get_admin_user)):
             "jwt_expire_minutes": ACCESS_TOKEN_EXPIRE_MINUTES
         }
     }
+
+@app.delete("/admin/revoke-api-key/{key_id}")
+def revoke_api_key(
+    key_id: int,
+    admin_user: dict = Depends(get_admin_user)
+):
+    """Revoga API key (apenas admin)"""
+    with db_manager.get_connection() as conn:
+        conn.execute(
+            "UPDATE api_keys SET is_active = 0 WHERE id = ?",
+            (key_id,)
+        )
+        conn.commit()
+    
+    return {"message": f"API key {key_id} revoked"}
+
+def cleanup_old_temp_files():
+    """Remove arquivos temporários antigos (> 1 hora)"""
+    temp_dir = os.path.join(os.getcwd(), "temp")
+    if not os.path.exists(temp_dir):
+        return
+    
+    now = time.time()
+    for filename in os.listdir(temp_dir):
+        filepath = os.path.join(temp_dir, filename)
+        if os.path.getmtime(filepath) < now - 3600:  # 1 hora
+            try:
+                os.remove(filepath)
+                logger.info(f"Removed old temp file: {filename}")
+            except Exception as e:
+                logger.error(f"Error removing {filename}: {e}")
+
+# Agendar limpeza a cada 30 minutos
+scheduler = BackgroundScheduler()
+scheduler.add_job(cleanup_old_temp_files, 'interval', minutes=30)
+scheduler.start()
 
 # Manter o código existente para desenvolvimento local
 if __name__ == "__main__":
