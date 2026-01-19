@@ -15,6 +15,10 @@ WORKDIR /build
 # Clonar repositório completo
 ARG REPO_URL=https://github.com/rodolfogoulart/mms_tts_api.git
 ARG BRANCH=auth
+
+# Usar cache busting para forçar re-clone quando necessário
+ARG CACHEBUST=1
+
 RUN git clone --depth 1 --branch ${BRANCH} ${REPO_URL} ./repo
 
 # Criar ambiente virtual
