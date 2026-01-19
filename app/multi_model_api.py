@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Hebrew & Greek TTS API (Authenticated)", 
     description="API especializada em TTS para Hebraico e Grego usando MMS-TTS com autenticação",
-    version="2.1.0"
+    version="3.1.0"
 )
 
 # ============================================
