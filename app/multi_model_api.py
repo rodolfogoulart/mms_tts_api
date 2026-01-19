@@ -19,6 +19,7 @@ import torch
 import numpy as np
 import os
 import uuid
+import hashlib
 import logging  # ← IMPORTANTE: Este import estava faltando ou na posição errada
 import time
 from datetime import datetime
@@ -365,6 +366,29 @@ def speak(
                 }
             )
         
+        # ====== VERIFICAR CACHE ======
+        cache_entry = db_manager.get_cache_entry(text, lang, model_key, final_speed)
+        if cache_entry:
+            logger.info(f"Returning cached audio for user {current_user.get('name')}: '{text[:50]}...' (hit #{cache_entry['hit_count']})")
+            return FileResponse(
+                cache_entry['file_path'], 
+                media_type="audio/mpeg", 
+                filename=f"tts_{lang}_{os.path.basename(cache_entry['file_path'])}",
+                headers={
+                    "X-Model-Used": model_config["name"],
+                    "X-Language": model_config["supported_languages"][lang],
+                    "X-Voice-Config": f"speed:{final_speed}",
+                    "X-Config-Source": config_source,
+                    "X-User": current_user.get("name", "Unknown"),
+                    "X-Auth-Type": current_user.get("type", "unknown"),
+                    "X-Cache-Hit": "true",
+                    "X-Cache-Hits": str(cache_entry['hit_count'])
+                }
+            )
+        
+        # ====== GERAR ÁUDIO (CACHE MISS) ======
+        logger.info(f"Cache MISS - Generating new audio: '{text[:50]}...'")
+        
         # Carregar modelo
         tts_model, tts_tokenizer = load_model(model_key)
         
@@ -402,13 +426,17 @@ def speak(
         # Obter sample rate do modelo
         sample_rate = getattr(tts_model.config, 'sampling_rate', 22050)
         
-        # Salvar arquivo temporário
-        temp_id = uuid.uuid4().hex
+        # Criar diretórios de cache
+        cache_dir = os.path.join(os.getcwd(), "cache")
         temp_dir = os.path.join(os.getcwd(), "temp")
+        os.makedirs(cache_dir, exist_ok=True)
         os.makedirs(temp_dir, exist_ok=True)
         
-        wav_path = os.path.join(temp_dir, f"tts_{temp_id}.wav")
-        mp3_path = os.path.join(temp_dir, f"tts_{temp_id}.mp3")
+        # Gerar ID único para o cache
+        cache_id = hashlib.sha256(f"{text}{lang}{model_key}{final_speed}".encode()).hexdigest()[:16]
+        
+        wav_path = os.path.join(temp_dir, f"tts_{cache_id}.wav")
+        mp3_path = os.path.join(cache_dir, f"tts_{cache_id}.mp3")
         
         # Salvar como WAV
         write(wav_path, sample_rate, (audio * 32767).astype(np.int16))
@@ -420,22 +448,24 @@ def speak(
         # Limpar arquivo WAV temporário
         os.remove(wav_path)
         
+        # Salvar no cache do banco de dados
+        file_size = os.path.getsize(mp3_path)
+        db_manager.save_cache_entry(text, lang, model_key, final_speed, mp3_path, file_size)
+        
         logger.info(f"Generated audio for user {current_user.get('name')}: '{text}' ({lang}) - speed:{final_speed} - {config_source}")
-
-        # Agendar remoção do arquivo MP3 após a resposta
-        background_tasks.add_task(os.remove, mp3_path)
         
         return FileResponse(
             mp3_path, 
             media_type="audio/mpeg", 
-            filename=f"tts_{lang}_{temp_id}.mp3",
+            filename=f"tts_{lang}_{cache_id}.mp3",
             headers={
                 "X-Model-Used": model_config["name"],
                 "X-Language": model_config["supported_languages"][lang],
                 "X-Voice-Config": f"speed:{final_speed}",
                 "X-Config-Source": config_source,
                 "X-User": current_user.get("name", "Unknown"),
-                "X-Auth-Type": current_user.get("type", "unknown")
+                "X-Auth-Type": current_user.get("type", "unknown"),
+                "X-Cache-Hit": "false"
             }
         )
         
@@ -729,6 +759,56 @@ def revoke_api_key(
     
     return {"message": f"API key {key_id} revoked"}
 
+@app.get("/admin/cache/stats")
+def get_cache_stats(admin_user: dict = Depends(get_admin_user)):
+    """Estatísticas do cache (apenas admin)"""
+    stats = db_manager.get_cache_stats()
+    return {
+        "cache_stats": stats,
+        "max_size_mb": 100,
+        "usage_percentage": round((stats['total_size_mb'] / 100) * 100, 2) if stats['total_size_mb'] else 0,
+        "admin": admin_user.get("username", admin_user.get("name"))
+    }
+
+@app.post("/admin/cache/cleanup")
+def force_cache_cleanup(admin_user: dict = Depends(get_admin_user)):
+    """Força limpeza do cache (apenas admin)"""
+    result = db_manager.cleanup_cache(max_size_mb=100)
+    return {
+        "message": "Cache cleanup executed",
+        "result": result,
+        "admin": admin_user.get("username", admin_user.get("name"))
+    }
+
+@app.delete("/admin/cache/clear")
+def clear_all_cache(admin_user: dict = Depends(get_admin_user)):
+    """Limpa todo o cache (apenas admin)"""
+    try:
+        with db_manager.get_connection() as conn:
+            # Buscar todos os arquivos
+            entries = conn.execute('SELECT file_path FROM tts_cache').fetchall()
+            
+            removed_count = 0
+            for entry in entries:
+                if os.path.exists(entry['file_path']):
+                    try:
+                        os.remove(entry['file_path'])
+                        removed_count += 1
+                    except Exception as e:
+                        logger.error(f"Error removing {entry['file_path']}: {e}")
+            
+            # Limpar tabela
+            conn.execute('DELETE FROM tts_cache')
+            conn.commit()
+        
+        return {
+            "message": "All cache cleared",
+            "files_removed": removed_count,
+            "admin": admin_user.get("username", admin_user.get("name"))
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 def cleanup_old_temp_files():
     """Remove arquivos temporários antigos (> 1 hora)"""
     temp_dir = os.path.join(os.getcwd(), "temp")
@@ -745,9 +825,19 @@ def cleanup_old_temp_files():
             except Exception as e:
                 logger.error(f"Error removing {filename}: {e}")
 
+def cleanup_cache_if_needed():
+    """Verifica e limpa cache se ultrapassar 100MB"""
+    try:
+        result = db_manager.cleanup_cache(max_size_mb=100)
+        if result['cleaned']:
+            logger.info(f"Cache cleanup: removed {result['removed_count']} entries, freed {result['freed_mb']}MB")
+    except Exception as e:
+        logger.error(f"Error during cache cleanup: {e}")
+
 # Agendar limpeza a cada 30 minutos
 scheduler = BackgroundScheduler()
 scheduler.add_job(cleanup_old_temp_files, 'interval', minutes=30)
+scheduler.add_job(cleanup_cache_if_needed, 'interval', minutes=30)
 scheduler.start()
 
 # Manter o código existente para desenvolvimento local
