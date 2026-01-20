@@ -9,22 +9,39 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # Cache persistente para modelos (evita re-download)
+      # Cache persistente para modelos TTS (evita re-download)
       - hf-cache:/home/app/.cache/huggingface
       - transformers-cache:/home/app/.cache/transformers
       - torch-cache:/home/app/.cache/torch
+      # Cache para Whisper (word alignment)
+      - whisper-cache:/app/.cache/whisper
+      # Banco de dados SQLite
+      - ./database:/app/database
       # Logs persistentes
       - ./logs:/home/app/logs
     environment:
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=info
+      # Whisper cache directory (word alignment)
+      - WHISPER_CACHE_DIR=/app/.cache/whisper
+      # Auto-initialize default data (optional)
+      - AUTO_INIT_DEFAULT_DATA=true
+    # Configuração otimizada para Oracle VM.Standard.A1.Flex (ARM64, 4 OCPUs, 24GB RAM)
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '4.0'          # Usar todos os 4 OCPUs disponíveis
+    #       memory: 6G           # 6GB: API + Whisper base (~250MB) + TTS models (~500MB) + headroom
+    #     reservations:
+    #       cpus: '2.0'          # Garantir mínimo de 2 OCPUs
+    #       memory: 3G           # Garantir mínimo de 3GB
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      start_period: 90s        # Aumentado para 90s (Whisper base demora ~30s para carregar)
 
 volumes:
   hf-cache:
@@ -32,4 +49,6 @@ volumes:
   transformers-cache:
     driver: local  
   torch-cache:
+    driver: local
+  whisper-cache:
     driver: local
