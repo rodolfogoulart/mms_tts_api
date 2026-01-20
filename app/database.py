@@ -127,6 +127,19 @@ class DatabaseManager:
                 )
             ''')
             
+            # Tabela de cache de alinhamento de palavras
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS tts_alignment_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cache_id INTEGER NOT NULL,
+                    words_json TEXT NOT NULL,
+                    alignment_model TEXT NOT NULL DEFAULT 'faster-whisper-tiny',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (cache_id) REFERENCES tts_cache (id) ON DELETE CASCADE,
+                    UNIQUE(cache_id)
+                )
+            ''')
+            
             # Índices para melhor performance
             conn.execute('''
                 CREATE INDEX IF NOT EXISTS idx_tts_cache_hash 
@@ -136,6 +149,11 @@ class DatabaseManager:
             conn.execute('''
                 CREATE INDEX IF NOT EXISTS idx_tts_cache_hit_count 
                 ON tts_cache(hit_count)
+            ''')
+            
+            conn.execute('''
+                CREATE INDEX IF NOT EXISTS idx_alignment_cache_id 
+                ON tts_alignment_cache(cache_id)
             ''')
             
             conn.commit()
@@ -456,6 +474,39 @@ class DatabaseManager:
             conn.commit()
             logger.info(f"Cache saved: {text[:50]}... -> {file_path}")
             return cache_id
+    
+    def get_alignment_cache(self, cache_id: int) -> Optional[Dict]:
+        """Busca alinhamento de palavras do cache"""
+        with self.get_connection() as conn:
+            cursor = conn.execute('''
+                SELECT words_json, alignment_model, created_at
+                FROM tts_alignment_cache
+                WHERE cache_id = ?
+            ''', (cache_id,))
+            
+            entry = cursor.fetchone()
+            if entry:
+                return {
+                    'words': json.loads(entry['words_json']),
+                    'alignment_model': entry['alignment_model'],
+                    'created_at': entry['created_at']
+                }
+            return None
+    
+    def save_alignment_cache(self, cache_id: int, words: List[Dict], 
+                            alignment_model: str = 'faster-whisper-tiny') -> int:
+        """Salva alinhamento de palavras no cache"""
+        with self.get_connection() as conn:
+            cursor = conn.execute('''
+                INSERT OR REPLACE INTO tts_alignment_cache
+                (cache_id, words_json, alignment_model)
+                VALUES (?, ?, ?)
+            ''', (cache_id, json.dumps(words, ensure_ascii=False), alignment_model))
+            
+            alignment_id = cursor.lastrowid
+            conn.commit()
+            logger.info(f"Alignment cache saved for cache_id {cache_id}: {len(words)} words")
+            return alignment_id
     
     def get_cache_size(self) -> int:
         """Retorna tamanho total do cache em bytes"""

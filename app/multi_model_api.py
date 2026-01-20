@@ -178,6 +178,13 @@ VOICE_PRESETS = {
     }
 }
 
+# Mapeamento de códigos de idioma MMS -> Whisper ISO
+WHISPER_LANG_MAP = {
+    "heb": "he",  # Hebrew
+    "ell": "el",  # Greek
+    "por": "pt"   # Portuguese
+}
+
 def load_model(model_key: str):
     """Carrega modelo dinamicamente com accelerate (compatível CPU/GPU)"""
     # Se modelo já está carregado, atualizar uso e retornar
@@ -234,6 +241,29 @@ def get_model_for_language(lang: str):
             return model_key, config
     return None, None
 
+# ============================================
+# INICIALIZAÇÃO DO WHISPER (STARTUP)
+# ============================================
+
+def initialize_whisper():
+    """
+    Inicializa modelo Whisper no startup da aplicação.
+    Chamado UMA VEZ antes de aceitar requests.
+    
+    Performance: Modelo 'base' (~150MB) demora ~10-30s para carregar
+    Configuração ARM64: 2 workers, 4 threads cada = 8 threads total
+    """
+    try:
+        from .word_alignment import init_whisper_model
+        
+        logger.info("🚀 Initializing Whisper model for word alignment...")
+        init_whisper_model()
+        logger.info("✅ Whisper model ready for requests")
+        
+    except Exception as e:
+        logger.warning(f"⚠️  Failed to initialize Whisper model: {e}")
+        logger.warning(f"⚠️  /speak_sync will return empty words[] on alignment requests")
+
 # Função para inicialização automática na primeira execução
 def initialize_app():
     """Inicializa aplicação na primeira execução"""
@@ -258,6 +288,9 @@ def initialize_app():
                 logger.info("Default data already exists or initialization skipped")
         except Exception as e:
             logger.error(f"Error during auto-initialization: {e}")
+    
+    # Inicializar Whisper model para word alignment
+    initialize_whisper()
 
 # Chamar inicialização na startup
 initialize_app()
@@ -332,7 +365,7 @@ def root():
     """Endpoint público - informações básicas"""
     return {
         "message": "Hebrew & Greek TTS API (Authenticated)",
-        "version": "2.1.0",
+        "version": "3.1.0",
         "authentication": {
             "required": True,
             "methods": ["JWT Bearer Token", "API Key"],
@@ -344,7 +377,14 @@ def root():
         "models": list(MODEL_CONFIG.keys()),
         "supported_languages": ["heb (Hebrew)", "ell (Greek)", "por (Portuguese)"],
         "public_endpoints": ["/", "/docs", "/auth/login"],
-        "protected_endpoints": ["/speak", "/models", "/languages", "/health"]
+        "protected_endpoints": [
+            "/speak - Generate TTS audio (returns MP3 file)",
+            "/speak_sync - Generate TTS audio with word-level timestamps (returns JSON)",
+            "/audio/{filename} - Serve cached audio files",
+            "/models", 
+            "/languages", 
+            "/health"
+        ]
     }
 
 @app.post("/speak")
@@ -511,6 +551,204 @@ def speak(
         logger.error(f"Error generating audio for user {current_user.get('name')}: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/speak_sync")
+def speak_sync(
+    background_tasks: BackgroundTasks,
+    text: str = Form(...), 
+    lang: str = Form(...), 
+    model: str = Form(default="auto"),
+    preset: str = Form(default=None),
+    speed: float = Form(default=None, ge=0.1, le=3.0),
+    current_user: dict = Depends(get_rate_limited_user)
+):
+    """
+    Gera áudio com word-level timestamps (sincronização)
+    
+    Retorna JSON com:
+    - audio_url: Caminho relativo do MP3
+    - language: Código do idioma
+    - words: Array de {text, start, end} com timestamps por palavra
+    
+    Se o alinhamento falhar, retorna words: [] (graceful degradation)
+    """
+    # Validações básicas
+    if not text or not text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+    
+    if len(text) > 5000:
+        raise HTTPException(status_code=400, detail="Text too long (max 5000 characters)")
+    
+    try:
+        logger.info(f"TTS sync request from user: {current_user.get('name', 'Unknown')} - Text: '{text[:50]}...'")
+        
+        # ====== PARTE 1: GERAR ÁUDIO (igual ao /speak) ======
+        
+        # Determinar configurações finais
+        if preset:
+            if preset not in VOICE_PRESETS:
+                raise HTTPException(status_code=400, detail=f"Preset '{preset}' não encontrado")
+            preset_config = VOICE_PRESETS[preset]
+            final_speed = preset_config["length_scale"]
+        else:
+            final_speed = speed if speed is not None else 1.0
+        
+        # Determinar modelo automaticamente se não especificado
+        if model == "auto":
+            model_key, model_config = get_model_for_language(lang)
+            if not model_key:
+                raise HTTPException(status_code=400, detail=f"Language '{lang}' not supported")
+        else:
+            if model not in MODEL_CONFIG:
+                raise HTTPException(status_code=400, detail=f"Model '{model}' not available")
+            model_key = model
+            model_config = MODEL_CONFIG[model_key]
+        
+        # Verificar se o idioma é suportado pelo modelo
+        if lang not in model_config["supported_languages"]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Language '{lang}' not supported by {model_config['name']}",
+                    "supported_languages": model_config["supported_languages"]
+                }
+            )
+        
+        # Verificar cache de áudio
+        cache_entry = db_manager.get_cache_entry(text, lang, model_key, final_speed)
+        
+        if cache_entry:
+            # Cache HIT - áudio já existe
+            audio_path = cache_entry['file_path']
+            cache_id = cache_entry['id']
+            logger.info(f"Audio cache HIT for sync request: '{text[:50]}...' (hit #{cache_entry['hit_count']})")
+        else:
+            # Cache MISS - gerar novo áudio
+            logger.info(f"Audio cache MISS - Generating new audio for sync: '{text[:50]}...'")
+            
+            # Carregar modelo TTS
+            tts_model, tts_tokenizer = load_model(model_key)
+            
+            # Gerar áudio
+            inputs = tts_tokenizer(text, return_tensors="pt")
+            
+            with torch.no_grad():
+                if accelerator.mixed_precision != "no":
+                    with accelerator.autocast():
+                        output = tts_model(**inputs)
+                else:
+                    output = tts_model(**inputs)
+                
+                if hasattr(output, 'waveform'):
+                    audio_tensor = output.waveform
+                elif hasattr(output, 'audio'):
+                    audio_tensor = output.audio
+                else:
+                    audio_tensor = output
+            
+            # Converter para numpy
+            audio = audio_tensor.cpu().float().numpy().squeeze()
+            
+            # Aplicar ajuste de velocidade
+            if final_speed != 1.0:
+                try:
+                    import librosa
+                    audio = librosa.effects.time_stretch(audio, rate=1.0/final_speed)
+                except ImportError:
+                    logger.warning("librosa not available, speed adjustment skipped")
+                    final_speed = 1.0
+            
+            # Sample rate
+            sample_rate = getattr(tts_model.config, 'sampling_rate', 22050)
+            
+            # Criar diretórios
+            cache_dir = os.path.join(os.getcwd(), "cache")
+            temp_dir = os.path.join(os.getcwd(), "temp")
+            os.makedirs(cache_dir, exist_ok=True)
+            os.makedirs(temp_dir, exist_ok=True)
+            
+            # Gerar ID único
+            cache_id_hash = hashlib.sha256(f"{text}{lang}{model_key}{final_speed}".encode()).hexdigest()[:16]
+            
+            wav_path = os.path.join(temp_dir, f"tts_{cache_id_hash}.wav")
+            audio_path = os.path.join(cache_dir, f"tts_{cache_id_hash}.mp3")
+            
+            # Salvar WAV
+            write(wav_path, sample_rate, (audio * 32767).astype(np.int16))
+            
+            # Converter para MP3
+            audio_segment = AudioSegment.from_wav(wav_path)
+            audio_segment.export(audio_path, format="mp3", bitrate="128k")
+            
+            # Limpar WAV temporário
+            os.remove(wav_path)
+            
+            # Salvar no cache do banco
+            file_size = os.path.getsize(audio_path)
+            cache_id = db_manager.save_cache_entry(text, lang, model_key, final_speed, audio_path, file_size)
+            
+            logger.info(f"Audio generated and cached (ID: {cache_id}) for sync request")
+        
+        # ====== PARTE 2: ALINHAMENTO DE PALAVRAS ======
+        
+        # Verificar cache de alinhamento
+        alignment_cache = db_manager.get_alignment_cache(cache_id)
+        
+        if alignment_cache:
+            # Cache HIT - alinhamento já existe
+            words = alignment_cache['words']
+            logger.info(f"Alignment cache HIT: {len(words)} words (cache_id: {cache_id})")
+        else:
+            # Cache MISS - realizar alinhamento
+            logger.info(f"Alignment cache MISS - Running word alignment for cache_id: {cache_id}")
+            
+            try:
+                from .word_alignment import align_words
+                
+                # Realizar alinhamento
+                words = align_words(audio_path, text, lang)
+                
+                if words:
+                    # Salvar no cache de alinhamento
+                    db_manager.save_alignment_cache(cache_id, words)
+                    logger.info(f"Word alignment successful: {len(words)} words aligned")
+                else:
+                    logger.warning(f"Word alignment returned empty result for cache_id: {cache_id}")
+                    
+            except ImportError as e:
+                logger.error(f"faster-whisper not available: {e}")
+                words = []
+            except Exception as e:
+                logger.error(f"Error during word alignment: {e}", exc_info=True)
+                words = []
+        
+        # ====== PARTE 3: RESPOSTA ======
+        
+        # Gerar URL relativa do áudio
+        audio_filename = os.path.basename(audio_path)
+        audio_url = f"/audio/{audio_filename}"
+        
+        response_data = {
+            "audio_url": audio_url,
+            "language": lang,
+            "language_name": model_config["supported_languages"][lang],
+            "model_used": model_config["name"],
+            "words": words,
+            "word_count": len(words),
+            "alignment_available": len(words) > 0,
+            "cache_hit": cache_entry is not None,
+            "alignment_cache_hit": alignment_cache is not None
+        }
+        
+        logger.info(f"Sync response ready: {len(words)} words, cache_hit={cache_entry is not None}")
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in speak_sync for user {current_user.get('name')}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/health")
 def health_check():
     """Health check público (sem autenticação)"""
@@ -523,6 +761,31 @@ def health_check():
         "supported_languages": ["heb", "ell", "por"],
         "authentication": "required for protected endpoints"
     }
+
+@app.get("/audio/{filename}")
+def serve_audio(
+    filename: str,
+    current_user: dict = Depends(get_current_active_user)
+):
+    """
+    Serve arquivos de áudio do cache (protegido)
+    Usado pelo endpoint /speak_sync para retornar URLs de áudio
+    """
+    # Validar filename (segurança)
+    if not filename.endswith('.mp3') or '..' in filename or '/' in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    
+    cache_dir = os.path.join(os.getcwd(), "cache")
+    audio_path = os.path.join(cache_dir, filename)
+    
+    if not os.path.exists(audio_path):
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    
+    return FileResponse(
+        audio_path,
+        media_type="audio/mpeg",
+        filename=filename
+    )
 
 @app.get("/health/detailed")
 def health_check_detailed(current_user: dict = Depends(get_current_active_user)):
