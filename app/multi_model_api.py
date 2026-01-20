@@ -219,7 +219,6 @@ def load_model(model_key: str):
     model = VitsModel.from_pretrained(
         config["model_id"],
         torch_dtype=torch_dtype,
-        device_map="auto" if has_cuda else None
     )
     
     tokenizer = AutoTokenizer.from_pretrained(config["model_id"])
