@@ -144,7 +144,7 @@ EXPOSE 8000
 # Labels para documentação
 LABEL org.opencontainers.image.title="Hebrew & Greek TTS API" \
       org.opencontainers.image.description="Authenticated TTS API for Hebrew, Greek and Portuguese using MMS-TTS" \
-      org.opencontainers.image.version="2.1.0" \
+      org.opencontainers.image.version="3.1.0" \
       org.opencontainers.image.source="https://github.com/rodolfogoulart/mms_tts_api"
 
 # Comando de inicialização
