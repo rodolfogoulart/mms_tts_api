@@ -2,6 +2,19 @@
 
 API especializada de Text-to-Speech focada em **Hebraico e Grego** usando modelos MMS-TTS do Meta/Facebook!
 
+## ✨ **Novidade: Word-Level Alignment** 🎯
+
+Agora com suporte a **sincronização palavra-por-palavra**!
+
+- 🎤 Endpoint `/speak_sync` retorna timestamps por palavra
+- 🎨 Perfeito para karaoke-style highlighting
+- 📖 Ideal para aplicativos de aprendizado de idiomas
+- 🔤 Preserva Unicode (niqqud hebraico, acentos gregos)
+
+**Documentação completa**: [`resources/WORD_ALIGNMENT_GUIDE.md`](resources/WORD_ALIGNMENT_GUIDE.md)
+
+---
+
 ## 🌟 **Modelos Suportados**
 
 ### 1. **MMS-TTS Hebrew** (Meta/Facebook) 
@@ -14,6 +27,11 @@ API especializada de Text-to-Speech focada em **Hebraico e Grego** usando modelo
 - ✅ **Grego nativo** (`ell`) 
 - 🏛️ Modelo especializado para grego
 - 📜 Suporte completo a caracteres gregos
+- 🚀 Alta qualidade e performance otimizada
+
+### 3. **MMS-TTS Portuguese** (Meta/Facebook)
+- ✅ **Português nativo** (`por`)
+- 🇧🇷 Modelo especializado para português
 - 🚀 Alta qualidade e performance otimizada
 
 ## 🚀 **Início Rápido**

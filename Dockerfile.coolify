@@ -84,8 +84,8 @@ RUN echo '#!/bin/sh' > /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
     echo 'echo "📁 Verificando permissões do diretório /app/data..."' >> /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
-    echo 'mkdir -p /app/data /app/temp /app/logs /app/.cache/huggingface' >> /entrypoint.sh && \
-    echo 'chown -R app:app /app/data /app/temp /app/logs /app/.cache/huggingface' >> /entrypoint.sh && \
+    echo 'mkdir -p /app/data /app/temp /app/logs /app/.cache/huggingface /app/.cache/whisper' >> /entrypoint.sh && \
+    echo 'chown -R app:app /app/data /app/temp /app/logs /app/.cache/huggingface /app/.cache/whisper' >> /entrypoint.sh && \
     echo 'chmod 755 /app/data' >> /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
     echo 'echo "✅ Permissões configuradas!"' >> /entrypoint.sh && \
@@ -102,6 +102,7 @@ VOLUME ["/app/data"]
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache/huggingface \
+    WHISPER_CACHE_DIR=/app/.cache/whisper \
     CUDA_VISIBLE_DEVICES="" \
     OMP_NUM_THREADS=2 \
     PORT=8000
