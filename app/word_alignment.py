@@ -118,7 +118,7 @@ def normalize_for_matching(text: str) -> str:
 def fuzzy_match_words(
     transcribed_words: List[str], 
     original_text: str,
-    threshold: float = 0.5
+    threshold: float = 0.4  # ← REDUZIDO de 0.5 para 0.4
 ) -> Tuple[List[str], List[float], List[Tuple[int, int]]]:
     """
     Faz matching avançado entre palavras transcritas e texto original.
@@ -128,27 +128,27 @@ def fuzzy_match_words(
     1. Separa palavras do texto original (preservando Unicode)
     2. Normaliza ambas as listas (remove diacríticos para comparação)
     3. Para cada palavra transcrita:
-       a. Busca melhor match em janela deslizante (5 palavras)
+       a. Busca melhor match em janela deslizante (EXPANDIDA para 10 palavras)
        b. Calcula similaridade com SequenceMatcher (Ratcliff-Obershelp)
        c. Aceita match se ratio >= threshold OU é palavra sequencial
-    4. Retorna palavras ORIGINAIS (com Unicode preservado) + posições no texto
+    4. Retorna palavras ORIGINAIS (com Unicode preservado)
     
     Performance:
-    - Janela de 5 palavras: O(5n) ≈ O(n)
+    - Janela de 10 palavras: O(10n) ≈ O(n) ainda aceitável
     - SequenceMatcher é otimizado em C (rápido)
     - Pre-normalization cache evita recomputação
     
     Args:
         transcribed_words: Palavras do Whisper (podem ter erros)
         original_text: Texto original com diacríticos
-        threshold: Similaridade mínima (0.0-1.0), padrão 0.5
+        threshold: Similaridade mínima (0.0-1.0), padrão 0.4
     
     Returns:
-        Tupla: (palavras matched, scores de confiança, posições no texto [(start, end), ...])
+        Tupla: (palavras matched, scores de confiança, posições no texto)
     """
-    # Separar palavras do texto original com suas posições
+    # Separar palavras do texto original (preservando Unicode) COM POSIÇÕES
     original_words = []
-    word_positions = []  # Lista de (start_idx, end_idx) para cada palavra
+    word_positions = []
     
     for match in re.finditer(r'\S+', original_text):
         original_words.append(match.group())
@@ -164,23 +164,30 @@ def fuzzy_match_words(
     
     matched_words = []
     confidence_scores = []
-    text_positions = []  # Lista de (textStart, textEnd) para cada palavra matched
+    text_positions = []
     original_idx = 0
+    
+    # ← NOVO: Rastrear palavras já usadas para evitar duplicatas
+    used_indices = set()
     
     for trans_idx, trans_word in enumerate(transcribed_normalized):
         best_match = None
         best_ratio = 0.0
         best_idx = original_idx
         
-        # Janela deslizante: próximas 5 palavras
-        # Permite pular palavras se Whisper omitiu/adicionou
-        search_end = min(len(original_normalized), original_idx + 5)
+        # ← EXPANDIDO: Janela deslizante de 10 palavras (antes era 5)
+        # Permite pular mais palavras se Whisper omitiu/adicionou
+        search_start = max(0, original_idx - 2)  # ← NOVO: Olhar 2 palavras atrás também
+        search_end = min(len(original_normalized), original_idx + 10)
         
-        for i in range(original_idx, search_end):
+        for i in range(search_start, search_end):
+            # ← NOVO: Pular palavras já usadas (evita duplicatas)
+            if i in used_indices:
+                continue
+                
             orig_word = original_normalized[i]
             
             # Calcular similaridade (Ratcliff-Obershelp algorithm)
-            # Mais robusto que Levenshtein para línguas com caracteres complexos
             ratio = SequenceMatcher(None, trans_word, orig_word).ratio()
             
             if ratio > best_ratio:
@@ -188,34 +195,49 @@ def fuzzy_match_words(
                 best_match = original_words[i]  # Palavra ORIGINAL (com Unicode)
                 best_idx = i
         
-        # Critério de aceitação:
-        # 1. Similaridade >= threshold (default 50%)
+        # ← AJUSTADO: Critério de aceitação mais rigoroso
+        # 1. Similaridade >= threshold (agora 40%)
         # 2. OU é a próxima palavra sequencial (aceita mesmo com baixo score)
         # 3. OU é a única palavra restante
+        # 4. E NÃO foi usada ainda
         accept_match = (
-            best_ratio >= threshold or 
-            best_idx == original_idx or 
-            original_idx >= len(original_words) - 1
+            best_ratio >= threshold and 
+            best_idx not in used_indices
+        ) or (
+            best_idx == original_idx and 
+            best_idx not in used_indices
+        ) or (
+            original_idx >= len(original_words) - 1 and 
+            best_idx not in used_indices
         )
         
         if accept_match and best_match:
             matched_words.append(best_match)
             confidence_scores.append(best_ratio)
-            text_positions.append(word_positions[best_idx])  # Adicionar posição no texto
+            text_positions.append(word_positions[best_idx])
+            used_indices.add(best_idx)  # ← NOVO: Marcar como usado
             original_idx = best_idx + 1
         else:
-            # Fallback: usar palavra transcrita (Whisper pode estar correto)
+            # ← AJUSTADO: Fallback mais inteligente
+            # Se confidence muito baixa (< 0.3), provavelmente é ruído do Whisper
+            # Não adicionar ao resultado final
+            if best_ratio < 0.3:
+                logger.debug(f"Skipping low-confidence word: '{trans_word}' (score: {best_ratio:.2f})")
+                continue
+            
+            # Fallback: usar palavra transcrita se tiver alguma similaridade
             fallback_word = transcribed_words[trans_idx] if trans_idx < len(transcribed_words) else trans_word
             matched_words.append(fallback_word)
             confidence_scores.append(best_ratio)
-            # Para fallback, não temos posição no texto original, usar (-1, -1)
-            text_positions.append((-1, -1))
+            text_positions.append((-1, -1))  # Posição desconhecida
             logger.debug(f"Low confidence match: '{trans_word}' -> '{fallback_word}' (score: {best_ratio:.2f})")
     
     # Log estatísticas de matching
     if confidence_scores:
         avg_confidence = sum(confidence_scores) / len(confidence_scores)
-        logger.info(f"Matching complete: {len(matched_words)} words, avg confidence: {avg_confidence:.2f}")
+        skipped = len(transcribed_words) - len(matched_words)
+        logger.info(f"Matching complete: {len(matched_words)}/{len(transcribed_words)} words, "
+                   f"avg confidence: {avg_confidence:.2f}, skipped: {skipped}")
     
     return matched_words, confidence_scores, text_positions
 
