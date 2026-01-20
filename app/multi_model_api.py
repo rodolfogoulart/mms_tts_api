@@ -567,7 +567,7 @@ def speak_sync(
     Retorna JSON com:
     - audio_url: Caminho relativo do MP3
     - language: Código do idioma
-    - words: Array de {text, start, end} com timestamps por palavra
+    - words: Array de {text, start, end, confidence, textStart, textEnd} com timestamps por palavra
     
     Se o alinhamento falhar, retorna words: [] (graceful degradation)
     """

@@ -119,7 +119,7 @@ def fuzzy_match_words(
     transcribed_words: List[str], 
     original_text: str,
     threshold: float = 0.5
-) -> Tuple[List[str], List[float]]:
+) -> Tuple[List[str], List[float], List[Tuple[int, int]]]:
     """
     Faz matching avançado entre palavras transcritas e texto original.
     Otimizado para hebraico/grego com algoritmo melhorado.
@@ -131,7 +131,7 @@ def fuzzy_match_words(
        a. Busca melhor match em janela deslizante (5 palavras)
        b. Calcula similaridade com SequenceMatcher (Ratcliff-Obershelp)
        c. Aceita match se ratio >= threshold OU é palavra sequencial
-    4. Retorna palavras ORIGINAIS (com Unicode preservado)
+    4. Retorna palavras ORIGINAIS (com Unicode preservado) + posições no texto
     
     Performance:
     - Janela de 5 palavras: O(5n) ≈ O(n)
@@ -144,14 +144,19 @@ def fuzzy_match_words(
         threshold: Similaridade mínima (0.0-1.0), padrão 0.5
     
     Returns:
-        Tupla: (palavras matched, scores de confiança)
+        Tupla: (palavras matched, scores de confiança, posições no texto [(start, end), ...])
     """
-    # Separar palavras do texto original (preservando Unicode)
-    original_words = re.findall(r'\S+', original_text)
+    # Separar palavras do texto original com suas posições
+    original_words = []
+    word_positions = []  # Lista de (start_idx, end_idx) para cada palavra
+    
+    for match in re.finditer(r'\S+', original_text):
+        original_words.append(match.group())
+        word_positions.append((match.start(), match.end()))
     
     if not original_words:
         logger.warning("Original text has no words")
-        return [], []
+        return [], [], []
     
     # Normalizar para matching (remove diacríticos)
     original_normalized = [normalize_for_matching(w) for w in original_words]
@@ -159,6 +164,7 @@ def fuzzy_match_words(
     
     matched_words = []
     confidence_scores = []
+    text_positions = []  # Lista de (textStart, textEnd) para cada palavra matched
     original_idx = 0
     
     for trans_idx, trans_word in enumerate(transcribed_normalized):
@@ -195,12 +201,15 @@ def fuzzy_match_words(
         if accept_match and best_match:
             matched_words.append(best_match)
             confidence_scores.append(best_ratio)
+            text_positions.append(word_positions[best_idx])  # Adicionar posição no texto
             original_idx = best_idx + 1
         else:
             # Fallback: usar palavra transcrita (Whisper pode estar correto)
             fallback_word = transcribed_words[trans_idx] if trans_idx < len(transcribed_words) else trans_word
             matched_words.append(fallback_word)
             confidence_scores.append(best_ratio)
+            # Para fallback, não temos posição no texto original, usar (-1, -1)
+            text_positions.append((-1, -1))
             logger.debug(f"Low confidence match: '{trans_word}' -> '{fallback_word}' (score: {best_ratio:.2f})")
     
     # Log estatísticas de matching
@@ -208,7 +217,7 @@ def fuzzy_match_words(
         avg_confidence = sum(confidence_scores) / len(confidence_scores)
         logger.info(f"Matching complete: {len(matched_words)} words, avg confidence: {avg_confidence:.2f}")
     
-    return matched_words, confidence_scores
+    return matched_words, confidence_scores, text_positions
 
 
 def align_words(audio_path: str, text: str, lang: str) -> List[Dict]:
@@ -238,7 +247,7 @@ def align_words(audio_path: str, text: str, lang: str) -> List[Dict]:
         lang: Código de idioma MMS ('heb', 'ell', 'por')
     
     Returns:
-        Lista: [{"text": "palavra", "start": 0.0, "end": 0.5, "confidence": 0.95}, ...]
+        Lista: [{"text": "palavra", "start": 0.0, "end": 0.5, "textStart": 0, "textEnd": 7, "confidence": 0.95}, ...]
         Lista vazia [] se falhar (graceful degradation)
     """
     try:
@@ -300,7 +309,7 @@ def align_words(audio_path: str, text: str, lang: str) -> List[Dict]:
         logger.info(f"📝 Transcribed {len(transcribed_words)} words from Whisper")
         
         # Fazer fuzzy matching com texto original (preservar Unicode)
-        matched_words, confidence_scores = fuzzy_match_words(
+        matched_words, confidence_scores, text_positions = fuzzy_match_words(
             transcribed_words, 
             text,
             threshold=0.5  # 50% similaridade mínima
@@ -313,15 +322,19 @@ def align_words(audio_path: str, text: str, lang: str) -> List[Dict]:
             if i < len(matched_words):
                 word_text = matched_words[i]
                 match_confidence = confidence_scores[i] if i < len(confidence_scores) else 0.0
+                text_start, text_end = text_positions[i] if i < len(text_positions) else (-1, -1)
             else:
                 # Fallback: palavra transcrita
                 word_text = word_data['text']
                 match_confidence = 0.0
+                text_start, text_end = -1, -1
             
             result.append({
                 'text': word_text,
                 'start': word_data['start'],
                 'end': word_data['end'],
+                'textStart': text_start,
+                'textEnd': text_end,
                 'confidence': round(match_confidence, 2)  # Adicionar score de confiança
             })
         
