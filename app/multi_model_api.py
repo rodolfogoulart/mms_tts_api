@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Hebrew & Greek TTS API (Authenticated)", 
     description="API especializada em TTS para Hebraico e Grego usando MMS-TTS com autenticação",
-    version="2.1.0"
+    version="3.1.0"
 )
 
 # ============================================
@@ -113,9 +113,24 @@ logger.info(f"Using device: {device} with accelerate")
 logger.info(f"Mixed precision: {accelerator.mixed_precision}")
 logger.info(f"Torch dtype: {torch_dtype}")
 
+# Configuração de limite de modelos em memória
+MAX_LOADED_MODELS = int(os.getenv("MAX_LOADED_MODELS", "2"))
+logger.info(f"Max loaded models: {MAX_LOADED_MODELS}")
+
+# Classe para rastrear uso dos modelos
+class ModelWrapper:
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.last_used = time.time()
+        self.usage_count = 0
+    
+    def mark_used(self):
+        self.last_used = time.time()
+        self.usage_count += 1
+
 # Modelos carregados dinamicamente
 models = {}
-tokenizers = {}
 
 # Configuração dos modelos disponíveis
 MODEL_CONFIG = {
@@ -165,8 +180,30 @@ VOICE_PRESETS = {
 
 def load_model(model_key: str):
     """Carrega modelo dinamicamente com accelerate (compatível CPU/GPU)"""
+    # Se modelo já está carregado, atualizar uso e retornar
     if model_key in models:
-        return models[model_key], tokenizers[model_key]
+        models[model_key].mark_used()
+        logger.info(f"Model cache HIT: {model_key} (used {models[model_key].usage_count} times)")
+        return models[model_key].model, models[model_key].tokenizer
+    
+    # Verificar se precisa descarregar modelo menos usado
+    if len(models) >= MAX_LOADED_MODELS:
+        # Encontrar modelo menos usado recentemente
+        least_used_key = min(models.keys(), key=lambda k: models[k].last_used)
+        least_used = models[least_used_key]
+        
+        logger.info(f"Unloading model '{least_used_key}' (used {least_used.usage_count} times, last: {time.time() - least_used.last_used:.0f}s ago)")
+        
+        # Remover referências
+        del models[least_used_key]
+        
+        # Liberar memória
+        if has_cuda:
+            torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+        
+        logger.info(f"Model '{least_used_key}' unloaded, memory freed")
     
     config = MODEL_CONFIG[model_key]
     logger.info(f"Loading model with accelerate: {config['name']} (dtype: {torch_dtype})")
@@ -183,8 +220,9 @@ def load_model(model_key: str):
     # Preparar modelo com accelerator
     model = accelerator.prepare(model)
     
-    models[model_key] = model
-    tokenizers[model_key] = tokenizer
+    # Criar wrapper e armazenar
+    wrapper = ModelWrapper(model, tokenizer)
+    models[model_key] = wrapper
     
     logger.info(f"Model {config['name']} loaded successfully with accelerate")
     return model, tokenizer
@@ -808,6 +846,57 @@ def clear_all_cache(admin_user: dict = Depends(get_admin_user)):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/admin/models/loaded")
+def get_loaded_models(admin_user: dict = Depends(get_admin_user)):
+    """Lista modelos carregados em memória (apenas admin)"""
+    loaded = []
+    for key, wrapper in models.items():
+        model_info = MODEL_CONFIG.get(key, {})
+        loaded.append({
+            "key": key,
+            "name": model_info.get("name", key),
+            "usage_count": wrapper.usage_count,
+            "last_used_seconds_ago": int(time.time() - wrapper.last_used),
+            "languages": list(model_info.get("supported_languages", {}).keys())
+        })
+    
+    # Ordenar por uso
+    loaded.sort(key=lambda x: x["usage_count"], reverse=True)
+    
+    return {
+        "loaded_models": loaded,
+        "total_loaded": len(loaded),
+        "max_models": MAX_LOADED_MODELS,
+        "available_models": list(MODEL_CONFIG.keys()),
+        "admin": admin_user.get("username", admin_user.get("name"))
+    }
+
+@app.post("/admin/models/unload/{model_key}")
+def unload_model(model_key: str, admin_user: dict = Depends(get_admin_user)):
+    """Descarrega modelo específico da memória (apenas admin)"""
+    if model_key not in models:
+        raise HTTPException(status_code=404, detail=f"Model '{model_key}' not loaded")
+    
+    wrapper = models[model_key]
+    usage_info = {
+        "usage_count": wrapper.usage_count,
+        "last_used_seconds_ago": int(time.time() - wrapper.last_used)
+    }
+    
+    del models[model_key]
+    
+    # Liberar memória
+    if has_cuda:
+        torch.cuda.empty_cache()
+    import gc
+    gc.collect()
+    
+    return {
+        "message": f"Model '{model_key}' unloaded",
+        "usage_info": usage_info,
+        "admin": admin_user.get("username", admin_user.get("name"))
+    }
 
 def cleanup_old_temp_files():
     """Remove arquivos temporários antigos (> 1 hora)"""
