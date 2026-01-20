@@ -1,11 +1,13 @@
 """
 Word-level alignment module using faster-whisper
 Otimizado para ARM64 CPU (Oracle VM.Standard.A1.Flex - 4 OCPUs, 24GB RAM)
+e CUDA GPU (Acer Nitro V15 - NVIDIA GPU)
 
 Performance considerations:
-- Modelo 'small' para ALTA acurácia em hebraico/grego (~85-95%)
-- int8 quantization para reduzir uso de memória (~1GB total)
-- Explicitamente CPU-only (sem GPU overhead)
+- Configurável via variáveis de ambiente (WHISPER_MODEL, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE)
+- Fallback automático para CPU caso CUDA não disponível
+- VPS Oracle: modelo 'small', int8, CPU-only (~500MB, 85-95% acurácia)
+- Notebook Local: modelo 'medium', float16, CUDA (~1.5GB VRAM, 90-98% acurácia)
 - Thread-safe para concorrência (2-3 requests simultâneos)
 - Pré-processamento de áudio para melhor transcrição
 - Preserva Unicode (niqqud hebraico, acentos gregos)
@@ -26,6 +28,11 @@ logger = logging.getLogger(__name__)
 # Cache directory for faster-whisper models
 WHISPER_CACHE_DIR = os.getenv("WHISPER_CACHE_DIR", "/app/.cache/whisper")
 
+# Configurações Whisper via variáveis de ambiente
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")           # small (VPS) ou medium (Local)
+WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "cpu")           # cpu (VPS) ou cuda (Local)
+WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")  # int8 (VPS) ou float16 (Local)
+
 # Global model instance (inicializado no startup da aplicação)
 _whisper_model = None
 _model_lock = threading.Lock()  # Thread-safety para inicialização
@@ -36,11 +43,22 @@ def init_whisper_model():
     Inicializa modelo faster-whisper no startup da aplicação.
     Deve ser chamado UMA VEZ durante a inicialização do FastAPI.
     
+    Configurações via variáveis de ambiente:
+    - WHISPER_MODEL: 'small' (VPS) ou 'medium' (Local) 
+    - WHISPER_DEVICE: 'cpu' (VPS) ou 'cuda' (Local)
+    - WHISPER_COMPUTE_TYPE: 'int8' (VPS) ou 'float16' (Local)
+    
     Performance:
-    - Modelo 'small': ~500MB, ALTA acurácia para hebraico/grego
+    VPS Oracle (ARM64 CPU):
+    - Modelo 'small': ~500MB, ALTA acurácia para hebraico/grego (85-95%)
     - int8 compute: reduz memória ~50% vs float16 (~1GB total)
     - num_workers=2: balanceado para 4 OCPUs ARM64
-    - CPU-only: Oracle VM não tem GPU
+    
+    Notebook Local (NVIDIA GPU):
+    - Modelo 'medium': ~1.5GB VRAM, MUITO ALTA acurácia (90-98%)
+    - float16 compute: melhor performance em GPU
+    - num_workers=4: aproveita GPU NVIDIA
+    - Fallback automático para CPU caso CUDA não disponível
     
     Thread-safety: Usa lock para evitar inicialização duplicada
     """
@@ -54,27 +72,56 @@ def init_whisper_model():
         try:
             from faster_whisper import WhisperModel
             
-            logger.info("🔧 Initializing faster-whisper 'small' model (ARM64 CPU, int8)...")
-            logger.info("   ⏱️  First load may take 2-3 minutes (downloading ~500MB)...")
+            # Detectar disponibilidade de CUDA
+            device = WHISPER_DEVICE
+            compute_type = WHISPER_COMPUTE_TYPE
+            
+            if device == "cuda":
+                try:
+                    import torch
+                    if not torch.cuda.is_available():
+                        logger.warning("⚠️  CUDA requested but not available, falling back to CPU")
+                        device = "cpu"
+                        compute_type = "int8"  # CPU funciona melhor com int8
+                    else:
+                        cuda_device = torch.cuda.get_device_name(0)
+                        logger.info(f"🎮 CUDA available: {cuda_device}")
+                except ImportError:
+                    logger.warning("⚠️  PyTorch not available, falling back to CPU")
+                    device = "cpu"
+                    compute_type = "int8"
+            
+            logger.info(f"🔧 Initializing faster-whisper '{WHISPER_MODEL}' model...")
+            logger.info(f"   - Device: {device}")
+            logger.info(f"   - Compute type: {compute_type}")
+            logger.info("   ⏱️  First load may take 2-5 minutes (downloading model)...")
             
             # Criar diretório de cache
             os.makedirs(WHISPER_CACHE_DIR, exist_ok=True)
             
-            # Configuração otimizada para ARM64 CPU (Oracle VM)
+            # Determinar número de workers baseado no dispositivo
+            num_workers = 4 if device == "cuda" else 2
+            cpu_threads = 8 if device == "cuda" else 4
+            
+            # Configuração otimizada
             _whisper_model = WhisperModel(
-                "small",                   # ALTA acurácia para hebraico/grego (~500MB)
-                device="cpu",              # CPU-only (sem GPU overhead)
-                compute_type="int8",       # Quantização: ~1GB memória total
+                WHISPER_MODEL,                # 'small' (VPS) ou 'medium' (Local)
+                device=device,                # 'cpu' ou 'cuda' (com fallback)
+                compute_type=compute_type,    # 'int8' (CPU) ou 'float16' (GPU)
                 download_root=WHISPER_CACHE_DIR,
-                num_workers=2,             # 2 workers para 4 OCPUs (balanceado)
-                cpu_threads=4              # 4 threads por worker (total 8 threads)
+                num_workers=num_workers,      # 2 (CPU) ou 4 (GPU)
+                cpu_threads=cpu_threads       # 4 (CPU) ou 8 (GPU)
             )
             
-            logger.info("✅ faster-whisper 'small' model loaded successfully")
-            logger.info(f"   - Device: CPU (ARM64)")
-            logger.info(f"   - Compute: int8 quantization")
-            logger.info(f"   - Workers: 2 (threads: 4 each)")
-            logger.info(f"   - Expected accuracy: 85-95% for Hebrew/Greek")
+            logger.info(f"✅ faster-whisper '{WHISPER_MODEL}' model loaded successfully")
+            logger.info(f"   - Device: {device.upper()}")
+            logger.info(f"   - Compute: {compute_type}")
+            logger.info(f"   - Workers: {num_workers} (threads: {cpu_threads} each)")
+            
+            if WHISPER_MODEL == "small":
+                logger.info(f"   - Expected accuracy: 85-95% for Hebrew/Greek")
+            elif WHISPER_MODEL == "medium":
+                logger.info(f"   - Expected accuracy: 90-98% for Hebrew/Greek")
             
             return _whisper_model
             

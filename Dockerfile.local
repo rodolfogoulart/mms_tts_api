@@ -103,20 +103,20 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache/huggingface \
     WHISPER_CACHE_DIR=/app/.cache/whisper \
-    CUDA_VISIBLE_DEVICES="" \
-    OMP_NUM_THREADS=2 \
+    OMP_NUM_THREADS=4 \
     PORT=8000
 
 # ============================================
-# Configurações Whisper para CPU (VPS Oracle)
+# Configurações Whisper para CUDA (Notebook Local)
 # ============================================
-# Otimizado para Oracle VM.Standard.A1.Flex (4 OCPUs ARM64, 24GB RAM)
-# - device="cpu" (sem GPU)
-# - compute_type="int8" (quantização para economizar memória)
-# - modelo="small" (boa acurácia, ~500MB)
-ENV WHISPER_DEVICE=cpu \
-    WHISPER_COMPUTE_TYPE=int8 \
-    WHISPER_MODEL=small
+# Otimizado para Acer Nitro V15 com GPU NVIDIA
+# - device="cuda" (usa GPU NVIDIA)
+# - compute_type="float16" (melhor performance em GPU)
+# - modelo="medium" (alta acurácia, ~1.5GB VRAM)
+# Fallback automático para CPU caso CUDA não disponível
+ENV WHISPER_DEVICE=cuda \
+    WHISPER_COMPUTE_TYPE=float16 \
+    WHISPER_MODEL=medium
 
 # Configurações JWT
 ENV JWT_SECRET_KEY="your-super-secret-jwt-key-change-in-production-12345" \
@@ -129,7 +129,7 @@ ENV DATABASE_PATH="/app/data/tts_auth.db"
 # Configurações de inicialização
 ENV AUTO_INIT_DEFAULT_DATA=true \
     CREATE_DEFAULT_USERS=true \
-    ENVIRONMENT=production
+    ENVIRONMENT=development
 
 # Credenciais do usuário admin
 ENV ADMIN_USERNAME="admin" \
@@ -160,9 +160,9 @@ HEALTHCHECK --interval=60s --timeout=15s --start-period=120s --retries=6 \
 
 EXPOSE 8000
 
-LABEL org.opencontainers.image.title="Hebrew & Greek TTS API" \
-      org.opencontainers.image.description="Authenticated TTS API for Hebrew, Greek and Portuguese using MMS-TTS" \
-      org.opencontainers.image.version="3.1.0" \
+LABEL org.opencontainers.image.title="Hebrew & Greek TTS API (Local CUDA)" \
+      org.opencontainers.image.description="Authenticated TTS API for Hebrew, Greek and Portuguese using MMS-TTS with CUDA support" \
+      org.opencontainers.image.version="3.1.0-cuda" \
       org.opencontainers.image.source="https://github.com/rodolfogoulart/mms_tts_api"
 
 ENTRYPOINT ["/entrypoint.sh"]
