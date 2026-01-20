@@ -58,11 +58,12 @@ RUN cd ./repo && \
 # ============================================
 FROM python:3.10-slim
 
-# Instalar runtime essenciais
+# Instalar runtime essenciais + gosu (substituto do su-exec)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
     ca-certificates \
+    gosu \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -77,20 +78,27 @@ COPY --from=builder /build/repo /app
 RUN useradd --create-home --uid 1000 app && \
     chown -R app:app /app
 
-USER app
+# Criar script de entrypoint usando echo (com gosu ao invés de su-exec)
+RUN echo '#!/bin/sh' > /entrypoint.sh && \
+    echo 'set -e' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo 'echo "📁 Verificando permissões do diretório /app/data..."' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo 'mkdir -p /app/data /app/temp /app/logs /app/.cache/huggingface' >> /entrypoint.sh && \
+    echo 'chown -R app:app /app/data /app/temp /app/logs /app/.cache/huggingface' >> /entrypoint.sh && \
+    echo 'chmod 755 /app/data' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo 'echo "✅ Permissões configuradas!"' >> /entrypoint.sh && \
+    echo 'echo "👤 Trocando para usuário app (UID 1000)..."' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo 'exec gosu app "$@"' >> /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
 WORKDIR /app
 
-# Criar diretórios necessários (incluir data)
-RUN mkdir -p temp logs .cache/huggingface data
-
-# Volume para persistir banco de dados
 VOLUME ["/app/data"]
 
-# ============================================
-# VARIÁVEIS DE AMBIENTE PADRÃO
-# ============================================
-
-# Configurações básicas da aplicação
+# Variáveis de ambiente Python
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache/huggingface \
@@ -98,12 +106,12 @@ ENV PYTHONUNBUFFERED=1 \
     OMP_NUM_THREADS=2 \
     PORT=8000
 
-# Configurações de segurança JWT
+# Configurações JWT
 ENV JWT_SECRET_KEY="your-super-secret-jwt-key-change-in-production-12345" \
     TOKEN_EXPIRE_MINUTES=60 \
     ALGORITHM=HS256
 
-# Configurações do banco de dados
+# Caminho do banco de dados
 ENV DATABASE_PATH="/app/data/tts_auth.db"
 
 # Configurações de inicialização
@@ -111,43 +119,42 @@ ENV AUTO_INIT_DEFAULT_DATA=true \
     CREATE_DEFAULT_USERS=true \
     ENVIRONMENT=production
 
-# Usuário Administrador
+# Credenciais do usuário admin
 ENV ADMIN_USERNAME="admin" \
     ADMIN_PASSWORD="yourPassword" \
-    ADMIN_EMAIL="youremail@email.com" \
+    ADMIN_EMAIL="youremail" \
     ADMIN_RATE_LIMIT=1000
 
-# Usuário Demo
+# Credenciais do usuário demo
 ENV DEMO_USERNAME="demo" \
     DEMO_PASSWORD="yourPassword" \
-    DEMO_EMAIL="youremail@email.com" \
+    DEMO_EMAIL="youremail" \
     DEMO_RATE_LIMIT=100
 
-# API Keys padrão
+# Configurações de API Keys
 ENV CREATE_DEMO_API_KEY=true \
     CREATE_ADMIN_API_KEY=false \
     DEMO_API_KEY_NAME="Demo API Key" \
     DEMO_API_KEY_RATE_LIMIT=50
 
-# Configurações avançadas
+# Configurações de rate limiting e workers
 ENV RATE_LIMIT_WINDOW_MINUTES=60 \
     LOG_LEVEL=INFO \
     MAX_WORKERS=1 \
     WORKER_TIMEOUT=300
 
-# Health check (endpoint público)
 HEALTHCHECK --interval=60s --timeout=15s --start-period=120s --retries=6 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 EXPOSE 8000
 
-# Labels para documentação
 LABEL org.opencontainers.image.title="Hebrew & Greek TTS API" \
       org.opencontainers.image.description="Authenticated TTS API for Hebrew, Greek and Portuguese using MMS-TTS" \
       org.opencontainers.image.version="3.1.0" \
       org.opencontainers.image.source="https://github.com/rodolfogoulart/mms_tts_api"
 
-# Comando de inicialização
+ENTRYPOINT ["/entrypoint.sh"]
+
 CMD ["python", "-m", "uvicorn", "app.multi_model_api:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
