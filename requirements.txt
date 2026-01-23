@@ -2,11 +2,10 @@
 # DEPENDÊNCIAS PRINCIPAIS
 # ============================================
 
-# Transformers e modelos de ML
-transformers>=4.33.0,<5.0.0
-torch>=2.2.0,<2.8.0
-torchaudio>=2.2.0,<2.8.0
-accelerate>=0.20.0,<0.35.0
+# ONNX Runtime e modelos de ML
+onnxruntime>=1.16.0,<2.0.0
+sherpa-onnx>=1.10.0  # For MMS-TTS ONNX models (proper preprocessing)
+huggingface-hub>=0.19.0,<0.25.0
 scipy>=1.10.0,<1.15.0
 numpy>=1.24.0,<2.0.0
 
@@ -14,6 +13,7 @@ numpy>=1.24.0,<2.0.0
 fastapi>=0.100.0,<0.115.0
 uvicorn[standard]>=0.20.0,<0.32.0
 python-multipart>=0.0.6,<0.0.10
+jinja2>=3.1.0,<3.2.0
 
 # Otimização de performance
 uvloop>=0.17.0,<0.21.0

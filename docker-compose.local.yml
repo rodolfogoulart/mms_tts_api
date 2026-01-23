@@ -1,11 +1,11 @@
 version: '3.8'
 
 services:
-  hebrew-greek-tts-local:
+  aletheia-tts-local:
     build: 
       context: .
       dockerfile: Dockerfile.local
-    container_name: hebrew-greek-tts-local
+    container_name: aletheia-tts-local
     ports:
       - "8000:8000"
     volumes:
@@ -50,8 +50,10 @@ services:
       # Usuários (opcional, ajuste conforme necessário)
       - ADMIN_USERNAME=admin
       - ADMIN_PASSWORD=admin123
+      - ADMIN_EMAIL=admin@example.com
       - DEMO_USERNAME=demo
       - DEMO_PASSWORD=demo123
+      - DEMO_EMAIL=demo@example.com
     
     # Configuração para GPU NVIDIA (requer nvidia-docker/nvidia-container-toolkit)
     deploy:

@@ -55,8 +55,8 @@ RUN echo '#!/bin/sh' > /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
     echo 'echo "📁 Verificando permissões do diretório /app/data..."' >> /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
-    echo 'mkdir -p /app/data /app/temp /app/logs /app/.cache/huggingface /app/.cache/whisper' >> /entrypoint.sh && \
-    echo 'chown -R app:app /app/data /app/temp /app/logs /app/.cache/huggingface /app/.cache/whisper' >> /entrypoint.sh && \
+    echo 'mkdir -p /app/data /app/temp /app/logs /app/.cache/huggingface /app/.cache/whisper /app/.cache/onnx_models' >> /entrypoint.sh && \
+    echo 'chown -R app:app /app/data /app/temp /app/logs /app/.cache/huggingface /app/.cache/whisper /app/.cache/onnx_models' >> /entrypoint.sh && \
     echo 'chmod 755 /app/data' >> /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
     echo 'echo "✅ Permissões configuradas!"' >> /entrypoint.sh && \
@@ -131,10 +131,11 @@ HEALTHCHECK --interval=60s --timeout=15s --start-period=120s --retries=6 \
 
 EXPOSE 8000
 
-LABEL org.opencontainers.image.title="Hebrew & Greek TTS API (Local CUDA)" \
-      org.opencontainers.image.description="Authenticated TTS API for Hebrew, Greek and Portuguese using MMS-TTS with CUDA support" \
-      org.opencontainers.image.version="3.1.0-cuda" \
-      org.opencontainers.image.source="https://github.com/rodolfogoulart/mms_tts_api"
+LABEL org.opencontainers.image.title="MMS-TTS API (Sherpa-ONNX)" \
+      org.opencontainers.image.description="Multilingual TTS API using Sherpa-ONNX for proper audio quality" \
+      org.opencontainers.image.version="4.0-sherpa-onnx" \
+      org.opencontainers.image.source="https://github.com/rodolfogoulart/mms_tts_api" \
+      org.opencontainers.image.runtime="sherpa-onnx"
 
 ENTRYPOINT ["/entrypoint.sh"]
 

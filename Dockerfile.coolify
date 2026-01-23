@@ -33,10 +33,8 @@ RUN cd ./repo && \
     else \
         pip install --no-cache-dir --upgrade pip && \
         pip install --no-cache-dir \
-            transformers==4.35.2 \
-            torch==2.2.0 \
-            torchaudio==2.2.0 \
-            accelerate==0.25.0 \
+            onnxruntime==1.17.0 \
+            huggingface-hub==0.20.0 \
             fastapi==0.104.1 \
             uvicorn[standard]==0.24.0 \
             python-multipart==0.0.6 \
@@ -49,7 +47,8 @@ RUN cd ./repo && \
             soundfile==0.12.1 \
             PyJWT==2.8.0 \
             python-jose[cryptography]==3.3.0 \
-            passlib[bcrypt]==1.7.4; \
+            passlib[bcrypt]==1.7.4 \
+            faster-whisper==1.0.0; \
     fi && \
     pip cache purge
 
@@ -84,8 +83,8 @@ RUN echo '#!/bin/sh' > /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
     echo 'echo "📁 Verificando permissões do diretório /app/data..."' >> /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
-    echo 'mkdir -p /app/data /app/temp /app/logs /app/.cache/huggingface /app/.cache/whisper' >> /entrypoint.sh && \
-    echo 'chown -R app:app /app/data /app/temp /app/logs /app/.cache/huggingface /app/.cache/whisper' >> /entrypoint.sh && \
+    echo 'mkdir -p /app/data /app/temp /app/logs /app/.cache/huggingface /app/.cache/whisper /app/.cache/onnx_models' >> /entrypoint.sh && \
+    echo 'chown -R app:app /app/data /app/temp /app/logs /app/.cache/huggingface /app/.cache/whisper /app/.cache/onnx_models' >> /entrypoint.sh && \
     echo 'chmod 755 /app/data' >> /entrypoint.sh && \
     echo '' >> /entrypoint.sh && \
     echo 'echo "✅ Permissões configuradas!"' >> /entrypoint.sh && \
@@ -103,7 +102,8 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache/huggingface \
     WHISPER_CACHE_DIR=/app/.cache/whisper \
-    CUDA_VISIBLE_DEVICES="" \
+    ORT_TENSORRT_FP16_ENABLE=0 \
+    ORT_TENSORRT_ENGINE_CACHE_ENABLE=1 \
     OMP_NUM_THREADS=2 \
     PORT=8000
 
@@ -160,10 +160,11 @@ HEALTHCHECK --interval=60s --timeout=15s --start-period=120s --retries=6 \
 
 EXPOSE 8000
 
-LABEL org.opencontainers.image.title="Hebrew & Greek TTS API" \
-      org.opencontainers.image.description="Authenticated TTS API for Hebrew, Greek and Portuguese using MMS-TTS" \
-      org.opencontainers.image.version="3.1.0" \
-      org.opencontainers.image.source="https://github.com/rodolfogoulart/mms_tts_api"
+LABEL org.opencontainers.image.title="Hebrew & Greek TTS API (ONNX)" \
+      org.opencontainers.image.description="Ultra-lightweight TTS API for Hebrew, Greek and Portuguese using MMS-TTS ONNX models" \
+      org.opencontainers.image.version="3.0-onnx" \
+      org.opencontainers.image.source="https://github.com/rodolfogoulart/mms_tts_api" \
+      org.opencontainers.image.runtime="onnxruntime"
 
 ENTRYPOINT ["/entrypoint.sh"]
 

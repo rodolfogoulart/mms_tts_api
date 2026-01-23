@@ -1,30 +1,36 @@
-# ============================================
-# IMPORTS PRINCIPAIS
-# ============================================
+#!/usr/bin/env python3
+"""
+MMS-TTS API Implementation using Sherpa-ONNX
+This fixes the audio quality issues by using proper Sherpa-ONNX inference
+instead of raw ONNX Runtime.
+"""
+
 from fastapi import FastAPI, Form, HTTPException, Depends, Request, BackgroundTasks
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.templating import Jinja2Templates
 from fastapi.security import HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
 
-# Imports para TTS
-from transformers import VitsModel, AutoTokenizer
-from accelerate import Accelerator
+# Sherpa-ONNX for TTS
+import sherpa_onnx
 from scipy.io.wavfile import write
 from pydub import AudioSegment
+from huggingface_hub import hf_hub_download
+import json
 
-# Imports padrão Python
-import torch
+# Standard imports
 import numpy as np
 import os
 import uuid
 import hashlib
-import logging  # ← IMPORTANTE: Este import estava faltando ou na posição errada
+import logging
 import time
 from datetime import datetime
+from pathlib import Path
 
-# Importar sistema de autenticação
+# Auth system
 from .auth import (
     get_current_active_user,
     get_admin_user, 
@@ -37,267 +43,267 @@ from .auth import (
 )
 from .database import db_manager
 
-# Importar o router de monitoring
+# Monitoring router
 try:
     from .monitoring import router as monitoring_router
 except ImportError:
     monitoring_router = None
 
 # ============================================
-# CONFIGURAÇÃO DE LOGGING (LOGO APÓS OS IMPORTS)
+# LOGGING CONFIGURATION
 # ============================================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ============================================
-# CONFIGURAÇÃO DA APLICAÇÃO
+# APPLICATION CONFIGURATION
 # ============================================
 app = FastAPI(
-    title="Hebrew & Greek TTS API (Authenticated)", 
-    description="API especializada em TTS para Hebraico e Grego usando MMS-TTS com autenticação",
-    version="3.1.0"
+    title="MMS-TTS API with Sherpa-ONNX", 
+    description="Multilingual TTS API using Sherpa-ONNX for proper audio quality",
+    version="4.0.0-sherpa"
 )
 
-# ============================================
-# MIDDLEWARES (ORDEM IMPORTANTE!)
-# ============================================
+templates = Jinja2Templates(directory="app/templates")
 
-# 1. GZip Middleware (deve ser adicionado PRIMEIRO)
-app.add_middleware(
-    GZipMiddleware, 
-    minimum_size=1000,  # Compactar apenas responses > 1KB
-    compresslevel=6     # Nível de compressão (1-9, 6 é bom equilíbrio)
-)
-
-# 2. CORS Middleware (depois do GZip)
+# ============================================
+# MIDDLEWARES
+# ============================================
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=6)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure adequadamente em produção
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Incluir rotas de monitoring (apenas para admins)
 if monitoring_router:
-    app.include_router(
-        monitoring_router, 
-        prefix="/monitoring", 
-        tags=["monitoring"],
-        dependencies=[Depends(get_admin_user)]  # Apenas admins
-    )
+    app.include_router(monitoring_router, prefix="/monitoring", tags=["monitoring"])
 
-# Verificar se GPU está disponível
-has_cuda = torch.cuda.is_available()
-logger.info(f"CUDA available: {has_cuda}")
+# ============================================
+# SHERPA-ONNX MODEL CONFIGURATION
+# ============================================
 
-# Inicializar Accelerator com configuração correta para CPU/GPU
-if has_cuda:
-    # Configuração para GPU (com FP16)
-    accelerator = Accelerator(
-        mixed_precision="fp16",
-        device_placement=True
-    )
-    torch_dtype = torch.float16
-else:
-    # Configuração para CPU (sem FP16 - usar FP32)
-    accelerator = Accelerator(
-        mixed_precision="no",  # Desabilitar mixed precision na CPU
-        cpu=True,
-        device_placement=True
-    )
-    torch_dtype = torch.float32
-
-device = accelerator.device
-logger.info(f"Using device: {device} with accelerate")
-logger.info(f"Mixed precision: {accelerator.mixed_precision}")
-logger.info(f"Torch dtype: {torch_dtype}")
-
-# Configuração de limite de modelos em memória
 MAX_LOADED_MODELS = int(os.getenv("MAX_LOADED_MODELS", "2"))
 logger.info(f"Max loaded models: {MAX_LOADED_MODELS}")
 
-# Classe para rastrear uso dos modelos
-class ModelWrapper:
-    def __init__(self, model, tokenizer):
-        self.model = model
-        self.tokenizer = tokenizer
+class SherpaONNXModel:
+    """Wrapper for Sherpa-ONNX TTS instance"""
+    def __init__(self, tts_instance, lang_code):
+        self.tts = tts_instance
+        self.lang_code = lang_code
+        self.sample_rate = tts_instance.sample_rate
+        self.num_speakers = tts_instance.num_speakers
         self.last_used = time.time()
         self.usage_count = 0
     
     def mark_used(self):
         self.last_used = time.time()
         self.usage_count += 1
+    
+    def generate(self, text: str, sid: int = 0, speed: float = 1.0):
+        """Generate speech using Sherpa-ONNX"""
+        self.mark_used()
+        audio = self.tts.generate(text, sid=sid, speed=speed)
+        return audio.samples, audio.sample_rate
 
-# Modelos carregados dinamicamente
+# Store loaded models
 models = {}
 
-# Configuração dos modelos disponíveis
+# Model configurations
 MODEL_CONFIG = {
     "hebrew": {
-        "name": "MMS-TTS Hebrew",
-        "model_id": "facebook/mms-tts-heb",
-        "type": "mms",
+        "name": "MMS-TTS Hebrew (Sherpa-ONNX)",
+        "model_id": "willwade/mms-tts-multilingual-models-onnx",
+        "type": "mms-sherpa-onnx",
+        "lang_code": "heb",
         "supported_languages": {"heb": "Hebrew"}
     },
     "greek": {
-        "name": "MMS-TTS Greek", 
-        "model_id": "facebook/mms-tts-ell",
-        "type": "mms",
+        "name": "MMS-TTS Greek (Sherpa-ONNX)", 
+        "model_id": "willwade/mms-tts-multilingual-models-onnx",
+        "type": "mms-sherpa-onnx",
+        "lang_code": "ell",
         "supported_languages": {"ell": "Greek"}
     },
     "portuguese": {
-        "name": "MMS-TTS Portuguese",
-        "model_id": "facebook/mms-tts-por",
-        "type": "mms",
+        "name": "MMS-TTS Portuguese (Sherpa-ONNX)",
+        "model_id": "willwade/mms-tts-multilingual-models-onnx",
+        "type": "mms-sherpa-onnx",
+        "lang_code": "por",
         "supported_languages": {"por": "Portuguese"}
     },
 }
 
-# Presets de voz (simplificados para MMS-TTS)
 VOICE_PRESETS = {
-    "natural": {
-        "description": "Voz natural balanceada",
-        "length_scale": 1.0
-    },
-    "expressive": {
-        "description": "Voz ligeiramente mais lenta (mais expressiva)",
-        "length_scale": 0.9
-    },
-    "robotic": {
-        "description": "Voz natural (limitações do modelo)",
-        "length_scale": 1.0
-    },
-    "slow": {
-        "description": "Fala lenta para aprendizado",
-        "length_scale": 1.5
-    },
-    "fast": {
-        "description": "Fala rápida",
-        "length_scale": 0.7
-    }
+    "natural": {"description": "Natural balanced voice", "speed": 1.0},
+    "expressive": {"description": "Slightly slower (more expressive)", "speed": 0.9},
+    "calm": {"description": "Calm and slower", "speed": 0.8},
+    "fast": {"description": "Faster speech", "speed": 1.2},
+    "slow": {"description": "Very slow and clear", "speed": 0.7}
 }
 
-# Mapeamento de códigos de idioma MMS -> Whisper ISO
-WHISPER_LANG_MAP = {
-    "heb": "he",  # Hebrew
-    "ell": "el",  # Greek
-    "por": "pt"   # Portuguese
-}
+# ============================================
+# MODEL LOADING WITH SHERPA-ONNX
+# ============================================
 
-def load_model(model_key: str):
-    """Carrega modelo dinamicamente com accelerate (compatível CPU/GPU)"""
-    # Se modelo já está carregado, atualizar uso e retornar
-    if model_key in models:
-        models[model_key].mark_used()
-        logger.info(f"Model cache HIT: {model_key} (used {models[model_key].usage_count} times)")
-        return models[model_key].model, models[model_key].tokenizer
+def download_sherpa_onnx_model(lang_code: str):
+    """Download model and tokens files for Sherpa-ONNX"""
+    model_id = "willwade/mms-tts-multilingual-models-onnx"
+    cache_dir = ".cache/onnx_models"
     
-    # Verificar se precisa descarregar modelo menos usado
+    try:
+        model_path = hf_hub_download(
+            repo_id=model_id,
+            filename=f"{lang_code}/model.onnx",
+            cache_dir=cache_dir
+        )
+        tokens_path = hf_hub_download(
+            repo_id=model_id,
+            filename=f"{lang_code}/tokens.txt",
+            cache_dir=cache_dir
+        )
+        logger.info(f"Downloaded {lang_code}: model={model_path}, tokens={tokens_path}")
+        return model_path, tokens_path
+    except Exception as e:
+        logger.error(f"Failed to download {lang_code} model: {e}")
+        raise
+
+def load_sherpa_onnx_model(model_name: str):
+    """Load a Sherpa-ONNX TTS model"""
+    if model_name in models:
+        logger.info(f"Model {model_name} already loaded")
+        models[model_name].mark_used()
+        return models[model_name]
+    
+    # Unload least recently used model if at capacity
     if len(models) >= MAX_LOADED_MODELS:
-        # Encontrar modelo menos usado recentemente
-        least_used_key = min(models.keys(), key=lambda k: models[k].last_used)
-        least_used = models[least_used_key]
-        
-        logger.info(f"Unloading model '{least_used_key}' (used {least_used.usage_count} times, last: {time.time() - least_used.last_used:.0f}s ago)")
-        
-        # Remover referências
-        del models[least_used_key]
-        
-        # Liberar memória
-        if has_cuda:
-            torch.cuda.empty_cache()
-        import gc
-        gc.collect()
-        
-        logger.info(f"Model '{least_used_key}' unloaded, memory freed")
+        lru_model = min(models.items(), key=lambda x: x[1].last_used)
+        logger.info(f"Unloading LRU model: {lru_model[0]}")
+        del models[lru_model[0]]
     
-    config = MODEL_CONFIG[model_key]
-    # Carregar modelo sempre como float32 para evitar erros de precisão mista
-    # VITS tem operações internas (Spline) que falham com FP16
-    safe_dtype = torch.float32
-    logger.info(f"Loading model with accelerate: {config['name']} (dtype: forced to {safe_dtype})")
+    config = MODEL_CONFIG.get(model_name)
+    if not config:
+        raise ValueError(f"Unknown model: {model_name}")
     
-    model = VitsModel.from_pretrained(
-        config["model_id"],
-        torch_dtype=safe_dtype,
+    lang_code = config["lang_code"]
+    
+    # Download model files
+    model_path, tokens_path = download_sherpa_onnx_model(lang_code)
+    
+    # Configure Sherpa-ONNX
+    vits_config = sherpa_onnx.OfflineTtsVitsModelConfig(
+        model=str(model_path),
+        tokens=str(tokens_path),
+        length_scale=1.0,
+        noise_scale=0.667,
+        noise_scale_w=0.8,
     )
     
-    tokenizer = AutoTokenizer.from_pretrained(config["model_id"])
+    model_config = sherpa_onnx.OfflineTtsModelConfig(
+        vits=vits_config,
+        num_threads=2,
+        debug=False,
+        provider="cpu",
+    )
     
-    # Preparar modelo com accelerator
-    model = accelerator.prepare(model)
+    tts_config = sherpa_onnx.OfflineTtsConfig(
+        model=model_config,
+        max_num_sentences=1,
+    )
     
-    # Criar wrapper e armazenar
-    wrapper = ModelWrapper(model, tokenizer)
-    models[model_key] = wrapper
+    logger.info(f"Loading Sherpa-ONNX model: {model_name} ({lang_code})")
+    start = time.time()
     
-    logger.info(f"Model {config['name']} loaded successfully with accelerate")
-    return model, tokenizer
-
-def get_model_for_language(lang: str):
-    """Determina qual modelo usar para um idioma específico"""
-    for model_key, config in MODEL_CONFIG.items():
-        if lang in config["supported_languages"]:
-            return model_key, config
-    return None, None
-
-# ============================================
-# INICIALIZAÇÃO DO WHISPER (STARTUP)
-# ============================================
-
-def initialize_whisper():
-    """
-    Inicializa modelo Whisper no startup da aplicação.
-    Chamado UMA VEZ antes de aceitar requests.
-    
-    Performance: Modelo 'base' (~150MB) demora ~10-30s para carregar
-    Configuração ARM64: 2 workers, 4 threads cada = 8 threads total
-    """
     try:
-        from .word_alignment import init_whisper_model
+        tts_instance = sherpa_onnx.OfflineTts(tts_config)
+        elapsed = time.time() - start
         
-        logger.info("🚀 Initializing Whisper model for word alignment...")
-        init_whisper_model()
-        logger.info("✅ Whisper model ready for requests")
+        logger.info(f"Model loaded in {elapsed:.2f}s")
+        logger.info(f"  Sample rate: {tts_instance.sample_rate}")
+        logger.info(f"  Num speakers: {tts_instance.num_speakers}")
+        
+        wrapper = SherpaONNXModel(tts_instance, lang_code)
+        models[model_name] = wrapper
+        return wrapper
         
     except Exception as e:
-        logger.warning(f"⚠️  Failed to initialize Whisper model: {e}")
-        logger.warning(f"⚠️  /speak_sync will return empty words[] on alignment requests")
-
-# Função para inicialização automática na primeira execução
-def initialize_app():
-    """Inicializa aplicação na primeira execução"""
-    # Verificar se deve inicializar dados padrão automaticamente
-    auto_init = os.getenv("AUTO_INIT_DEFAULT_DATA", "false").lower() == "true"
-    
-    if auto_init:
-        logger.info("Auto-initializing default data...")
-        try:
-            result = db_manager.initialize_default_data()
-            if result:
-                logger.info("Default data initialized successfully")
-                # Log das credenciais criadas (apenas no desenvolvimento)
-                if os.getenv("ENVIRONMENT", "production") == "development":
-                    if "admin_user" in result and "credentials" in result["admin_user"]:
-                        logger.info(f"Admin credentials: {result['admin_user']['credentials']}")
-                    if "demo_user" in result and "credentials" in result["demo_user"]:
-                        logger.info(f"Demo credentials: {result['demo_user']['credentials']}")
-                    if "demo_api_key" in result and "key" in result["demo_api_key"]:
-                        logger.info(f"Demo API Key: {result['demo_api_key']['key']}")
-            else:
-                logger.info("Default data already exists or initialization skipped")
-        except Exception as e:
-            logger.error(f"Error during auto-initialization: {e}")
-    
-    # Inicializar Whisper model para word alignment
-    initialize_whisper()
-
-# Chamar inicialização na startup
-initialize_app()
+        logger.error(f"Failed to load Sherpa-ONNX model {model_name}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load model: {e}")
 
 # ============================================
-# ROTAS DE AUTENTICAÇÃO
+# CACHE MANAGEMENT
+# ============================================
+
+CACHE_DIR = "cache"
+TEMP_DIR = "temp"
+MAX_CACHE_SIZE_MB = int(os.getenv("MAX_CACHE_SIZE_MB", "500"))
+
+os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(TEMP_DIR, exist_ok=True)
+
+def get_cache_key(text: str, model_name: str, speed: float, output_format: str) -> str:
+    """Generate cache key from parameters"""
+    content = f"{text}_{model_name}_{speed}_{output_format}"
+    return hashlib.md5(content.encode()).hexdigest()[:16]
+
+def cleanup_old_cache():
+    """Remove old cached files"""
+    try:
+        cache_files = []
+        for f in os.listdir(CACHE_DIR):
+            path = os.path.join(CACHE_DIR, f)
+            if os.path.isfile(path):
+                cache_files.append((path, os.path.getmtime(path), os.path.getsize(path)))
+        
+        # Sort by modification time (oldest first)
+        cache_files.sort(key=lambda x: x[1])
+        
+        total_size_mb = sum(f[2] for f in cache_files) / (1024 * 1024)
+        
+        if total_size_mb > MAX_CACHE_SIZE_MB:
+            removed = 0
+            for path, _, size in cache_files:
+                if total_size_mb <= MAX_CACHE_SIZE_MB * 0.8:  # Keep 80% threshold
+                    break
+                try:
+                    os.remove(path)
+                    total_size_mb -= size / (1024 * 1024)
+                    removed += 1
+                except Exception as e:
+                    logger.warning(f"Failed to remove {path}: {e}")
+            
+            logger.info(f"Cleaned up {removed} old cache files")
+    except Exception as e:
+        logger.error(f"Cache cleanup error: {e}")
+
+# Schedule cache cleanup
+scheduler = BackgroundScheduler()
+scheduler.add_job(cleanup_old_cache, 'interval', hours=1)
+scheduler.start()
+
+# ============================================
+# API ENDPOINTS
+# ============================================
+
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    """Landing page"""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "version": "4.0.0-sherpa",
+        "loaded_models": list(models.keys()),
+        "engine": "sherpa-onnx"
+    }
+
+# ============================================
+# AUTH ENDPOINTS
 # ============================================
 
 @app.post("/auth/login")
@@ -306,7 +312,7 @@ def login(
     username: str = Form(...), 
     password: str = Form(...)
 ):
-    """Login com usuário/senha (retorna JWT)"""
+    """Login with username/password (returns JWT token)"""
     ip_address = request.headers.get("X-Forwarded-For", request.client.host if request.client else "unknown")
     
     user_data = db_manager.authenticate_user(username, password, ip_address)
@@ -337,7 +343,7 @@ def login(
 
 @app.post("/auth/logout")
 def logout(current_user: dict = Depends(get_current_active_user)):
-    """Logout (revoga token JWT)"""
+    """Logout (revokes JWT token)"""
     if current_user["type"] == "jwt" and "jti" in current_user:
         revoke_token(current_user["jti"])
         return {"message": "Successfully logged out"}
@@ -346,7 +352,7 @@ def logout(current_user: dict = Depends(get_current_active_user)):
 
 @app.get("/auth/me")
 def get_current_user_info(current_user: dict = Depends(get_current_active_user)):
-    """Informações do usuário atual"""
+    """Get current user information"""
     stats = {}
     if current_user["type"] == "jwt" and "user_id" in current_user:
         stats = db_manager.get_user_stats(current_user["user_id"])
@@ -358,841 +364,154 @@ def get_current_user_info(current_user: dict = Depends(get_current_active_user))
     }
 
 # ============================================
-# ROTAS PROTEGIDAS
+# TTS ENDPOINTS
 # ============================================
-
-@app.get("/")
-def root():
-    """Endpoint público - informações básicas"""
-    return {
-        "message": "Hebrew & Greek TTS API (Authenticated)",
-        "version": "3.1.0",
-        "authentication": {
-            "required": True,
-            "methods": ["JWT Bearer Token", "API Key"],
-            "endpoints": {
-                "login": "/auth/login",
-                "profile": "/auth/me"
-            }
-        },
-        "models": list(MODEL_CONFIG.keys()),
-        "supported_languages": ["heb (Hebrew)", "ell (Greek)", "por (Portuguese)"],
-        "public_endpoints": ["/", "/docs", "/auth/login"],
-        "protected_endpoints": [
-            "/speak - Generate TTS audio (returns MP3 file)",
-            "/speak_sync - Generate TTS audio with word-level timestamps (returns JSON)",
-            "/audio/{filename} - Serve cached audio files",
-            "/models", 
-            "/languages", 
-            "/health"
-        ]
-    }
 
 @app.post("/speak")
-def speak(
-    background_tasks: BackgroundTasks,
-    text: str = Form(...), 
-    lang: str = Form(...), 
-    model: str = Form(default="auto"),
-    preset: str = Form(default=None),
-    speed: float = Form(default=None, ge=0.1, le=3.0),
-    current_user: dict = Depends(get_rate_limited_user)  # Autenticação + Rate Limit
+async def speak(
+    text: str = Form(...),
+    model: str = Form("hebrew"),
+    speed: float = Form(1.0),
+    output_format: str = Form("mp3"),
+    user = Depends(get_rate_limited_user)
 ):
     """
-    Gera áudio com autenticação e rate limiting
+    Generate speech from text using Sherpa-ONNX
+    
+    - **text**: Text to convert to speech
+    - **model**: Model to use (hebrew, greek, portuguese)
+    - **speed**: Speech speed (0.5-2.0, default 1.0)
+    - **output_format**: Output format (mp3 or wav)
     """
-    # Adicionar validação
     if not text or not text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
     
-    # Limitar tamanho do texto
-    if len(text) > 5000:
-        raise HTTPException(status_code=400, detail="Text too long (max 5000 characters)")
+    if model not in MODEL_CONFIG:
+        raise HTTPException(status_code=400, detail=f"Unknown model: {model}")
     
+    if not (0.5 <= speed <= 2.0):
+        raise HTTPException(status_code=400, detail="Speed must be between 0.5 and 2.0")
+    
+    if output_format not in ["mp3", "wav"]:
+        raise HTTPException(status_code=400, detail="Format must be mp3 or wav")
+    
+    # Check cache
+    cache_key = get_cache_key(text, model, speed, output_format)
+    cache_file = os.path.join(CACHE_DIR, f"tts_{cache_key}.{output_format}")
+    
+    if os.path.exists(cache_file):
+        logger.info(f"Cache hit: {cache_key}")
+        return FileResponse(
+            cache_file,
+            media_type="audio/mpeg" if output_format == "mp3" else "audio/wav",
+            filename=f"speech.{output_format}"
+        )
+    
+    # Load model
     try:
-        logger.info(f"TTS request from user: {current_user.get('name', 'Unknown')} - Text: '{text[:50]}...'")
+        model_wrapper = load_sherpa_onnx_model(model)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    # Generate speech
+    try:
+        start = time.time()
+        audio_samples, sample_rate = model_wrapper.generate(text, sid=0, speed=speed)
+        elapsed = time.time() - start
         
-        # Determinar configurações finais
-        if preset:
-            if preset not in VOICE_PRESETS:
-                raise HTTPException(status_code=400, detail=f"Preset '{preset}' não encontrado")
-            
-            preset_config = VOICE_PRESETS[preset]
-            final_speed = preset_config["length_scale"]
-            config_source = f"preset '{preset}'"
+        duration = len(audio_samples) / sample_rate
+        rtf = elapsed / duration if duration > 0 else 0
+        
+        logger.info(f"Generated {duration:.2f}s audio in {elapsed:.2f}s (RTF: {rtf:.2f}x)")
+        logger.info(f"Audio array shape: {audio_samples.shape if hasattr(audio_samples, 'shape') else len(audio_samples)}, dtype: {audio_samples.dtype if hasattr(audio_samples, 'dtype') else type(audio_samples)}, sample_rate: {sample_rate}")
+        
+        # Convert to numpy array if it's a list
+        if not isinstance(audio_samples, np.ndarray):
+            audio_samples = np.array(audio_samples, dtype=np.float32)
+            logger.info(f"Converted list to numpy array: {audio_samples.shape}")
+        
+        # Save temporary WAV
+        temp_wav = os.path.join(TEMP_DIR, f"{uuid.uuid4()}.wav")
+        
+        # Ensure audio is 1D array
+        if len(audio_samples.shape) > 1:
+            audio_samples = audio_samples.flatten()
+        
+        # Convert float32 to int16
+        audio_int16 = np.int16(np.clip(audio_samples * 32767, -32768, 32767))
+        logger.info(f"Converted audio size: {len(audio_int16)} samples, {len(audio_int16) * 2 / 1024:.2f} KB raw")
+        write(temp_wav, sample_rate, audio_int16)
+        
+        # Convert to output format
+        if output_format == "mp3":
+            audio_segment = AudioSegment.from_wav(temp_wav)
+            logger.info(f"WAV temp file size: {os.path.getsize(temp_wav) / 1024:.2f} KB")
+            audio_segment.export(cache_file, format="mp3", bitrate="128k")
+            logger.info(f"MP3 final file size: {os.path.getsize(cache_file) / 1024:.2f} KB")
+            os.remove(temp_wav)
         else:
-            final_speed = speed if speed is not None else 1.0
-            config_source = "manual parameters" if speed is not None else "default values"
-        
-        # Determinar modelo automaticamente se não especificado
-        if model == "auto":
-            model_key, model_config = get_model_for_language(lang)
-            if not model_key:
-                raise HTTPException(status_code=400, detail=f"Language '{lang}' not supported")
-        else:
-            if model not in MODEL_CONFIG:
-                raise HTTPException(status_code=400, detail=f"Model '{model}' not available")
-            model_key = model
-            model_config = MODEL_CONFIG[model_key]
-        
-        # Verificar se o idioma é suportado pelo modelo
-        if lang not in model_config["supported_languages"]:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Language '{lang}' not supported by {model_config['name']}",
-                    "supported_languages": model_config["supported_languages"]
-                }
-            )
-        
-        # ====== VERIFICAR CACHE ======
-        cache_entry = db_manager.get_cache_entry(text, lang, model_key, final_speed)
-        if cache_entry:
-            logger.info(f"Returning cached audio for user {current_user.get('name')}: '{text[:50]}...' (hit #{cache_entry['hit_count']})")
-            return FileResponse(
-                cache_entry['file_path'], 
-                media_type="audio/mpeg", 
-                filename=f"tts_{lang}_{os.path.basename(cache_entry['file_path'])}",
-                headers={
-                    "X-Model-Used": model_config["name"],
-                    "X-Language": model_config["supported_languages"][lang],
-                    "X-Voice-Config": f"speed:{final_speed}",
-                    "X-Config-Source": config_source,
-                    "X-User": current_user.get("name", "Unknown"),
-                    "X-Auth-Type": current_user.get("type", "unknown"),
-                    "X-Cache-Hit": "true",
-                    "X-Cache-Hits": str(cache_entry['hit_count'])
-                }
-            )
-        
-        # ====== GERAR ÁUDIO (CACHE MISS) ======
-        logger.info(f"Cache MISS - Generating new audio: '{text[:50]}...'")
-        
-        # Carregar modelo
-        tts_model, tts_tokenizer = load_model(model_key)
-        
-        # Gerar áudio usando MMS-TTS com accelerate
-        inputs = tts_tokenizer(text, return_tensors="pt")
-        inputs = {k: v.to(accelerator.device) for k, v in inputs.items()}
-        
-        with torch.no_grad():
-            # FIX: VITS model has issues with autocast combined with index_put
-            # Better to let accelerator handle types or use model's native precision
-            output = tts_model(**inputs)
-            
-            # Extrair tensor de áudio
-            if hasattr(output, 'waveform'):
-                audio_tensor = output.waveform
-            elif hasattr(output, 'audio'):
-                audio_tensor = output.audio
-            else:
-                audio_tensor = output
-        
-        # Converter para numpy
-        audio = audio_tensor.cpu().float().numpy().squeeze()
-        
-        # Aplicar ajuste de velocidade se necessário
-        if final_speed != 1.0:
-            try:
-                import librosa
-                audio = librosa.effects.time_stretch(audio, rate=1.0/final_speed)
-                logger.info(f"Applied speed adjustment: {final_speed}")
-            except ImportError:
-                logger.warning("librosa not available, speed adjustment skipped")
-                final_speed = 1.0
-        
-        # Obter sample rate do modelo
-        sample_rate = getattr(tts_model.config, 'sampling_rate', 22050)
-        
-        # Criar diretórios de cache
-        cache_dir = os.path.join(os.getcwd(), "cache")
-        temp_dir = os.path.join(os.getcwd(), "temp")
-        os.makedirs(cache_dir, exist_ok=True)
-        os.makedirs(temp_dir, exist_ok=True)
-        
-        # Gerar ID único para o cache
-        cache_id = hashlib.sha256(f"{text}{lang}{model_key}{final_speed}".encode()).hexdigest()[:16]
-        
-        wav_path = os.path.join(temp_dir, f"tts_{cache_id}.wav")
-        mp3_path = os.path.join(cache_dir, f"tts_{cache_id}.mp3")
-        
-        # Salvar como WAV
-        write(wav_path, sample_rate, (audio * 32767).astype(np.int16))
-        
-        # Converter para MP3
-        audio_segment = AudioSegment.from_wav(wav_path)
-        audio_segment.export(mp3_path, format="mp3", bitrate="128k")
-        
-        # Limpar arquivo WAV temporário
-        os.remove(wav_path)
-        
-        # Salvar no cache do banco de dados
-        file_size = os.path.getsize(mp3_path)
-        db_manager.save_cache_entry(text, lang, model_key, final_speed, mp3_path, file_size)
-        
-        logger.info(f"Generated audio for user {current_user.get('name')}: '{text}' ({lang}) - speed:{final_speed} - {config_source}")
+            os.rename(temp_wav, cache_file)
+            logger.info(f"WAV final file size: {os.path.getsize(cache_file) / 1024:.2f} KB")
         
         return FileResponse(
-            mp3_path, 
-            media_type="audio/mpeg", 
-            filename=f"tts_{lang}_{cache_id}.mp3",
-            headers={
-                "X-Model-Used": model_config["name"],
-                "X-Language": model_config["supported_languages"][lang],
-                "X-Voice-Config": f"speed:{final_speed}",
-                "X-Config-Source": config_source,
-                "X-User": current_user.get("name", "Unknown"),
-                "X-Auth-Type": current_user.get("type", "unknown"),
-                "X-Cache-Hit": "false"
-            }
+            cache_file,
+            media_type="audio/mpeg" if output_format == "mp3" else "audio/wav",
+            filename=f"speech.{output_format}"
         )
         
     except Exception as e:
-        logger.error(f"Error generating audio for user {current_user.get('name')}: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/speak_sync")
-def speak_sync(
-    background_tasks: BackgroundTasks,
-    text: str = Form(...), 
-    lang: str = Form(...), 
-    model: str = Form(default="auto"),
-    preset: str = Form(default=None),
-    speed: float = Form(default=None, ge=0.1, le=3.0),
-    current_user: dict = Depends(get_rate_limited_user)
-):
-    """
-    Gera áudio com word-level timestamps (sincronização)
-    
-    Retorna JSON com:
-    - audio_url: Caminho relativo do MP3
-    - language: Código do idioma
-    - words: Array de {text, start, end, confidence, textStart, textEnd} com timestamps por palavra
-    
-    Se o alinhamento falhar, retorna words: [] (graceful degradation)
-    """
-    # Validações básicas
-    if not text or not text.strip():
-        raise HTTPException(status_code=400, detail="Text cannot be empty")
-    
-    if len(text) > 5000:
-        raise HTTPException(status_code=400, detail="Text too long (max 5000 characters)")
-    
-    try:
-        logger.info(f"TTS sync request from user: {current_user.get('name', 'Unknown')} - Text: '{text[:50]}...'")
-        
-        # ====== PARTE 1: GERAR ÁUDIO (igual ao /speak) ======
-        
-        # Determinar configurações finais
-        if preset:
-            if preset not in VOICE_PRESETS:
-                raise HTTPException(status_code=400, detail=f"Preset '{preset}' não encontrado")
-            preset_config = VOICE_PRESETS[preset]
-            final_speed = preset_config["length_scale"]
-        else:
-            final_speed = speed if speed is not None else 1.0
-        
-        # Determinar modelo automaticamente se não especificado
-        if model == "auto":
-            model_key, model_config = get_model_for_language(lang)
-            if not model_key:
-                raise HTTPException(status_code=400, detail=f"Language '{lang}' not supported")
-        else:
-            if model not in MODEL_CONFIG:
-                raise HTTPException(status_code=400, detail=f"Model '{model}' not available")
-            model_key = model
-            model_config = MODEL_CONFIG[model_key]
-        
-        # Verificar se o idioma é suportado pelo modelo
-        if lang not in model_config["supported_languages"]:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"Language '{lang}' not supported by {model_config['name']}",
-                    "supported_languages": model_config["supported_languages"]
-                }
-            )
-        
-        # Verificar cache de áudio
-        cache_entry = db_manager.get_cache_entry(text, lang, model_key, final_speed)
-        
-        if cache_entry:
-            # Cache HIT - áudio já existe
-            audio_path = cache_entry['file_path']
-            cache_id = cache_entry['id']
-            logger.info(f"Audio cache HIT for sync request: '{text[:50]}...' (hit #{cache_entry['hit_count']})")
-        else:
-            # Cache MISS - gerar novo áudio
-            logger.info(f"Audio cache MISS - Generating new audio for sync: '{text[:50]}...'")
-            
-            # Carregar modelo TTS
-            tts_model, tts_tokenizer = load_model(model_key)
-            
-            # Gerar áudio
-            inputs = tts_tokenizer(text, return_tensors="pt")
-            inputs = {k: v.to(accelerator.device) for k, v in inputs.items()}
-            
-            with torch.no_grad():
-                # FIX: VITS model has issues with autocast combined with index_put
-                # Better to let accelerator handle types or use model's native precision
-                output = tts_model(**inputs)
-                
-                if hasattr(output, 'waveform'):
-                    audio_tensor = output.waveform
-                elif hasattr(output, 'audio'):
-                    audio_tensor = output.audio
-                else:
-                    audio_tensor = output
-            
-            # Converter para numpy
-            audio = audio_tensor.cpu().float().numpy().squeeze()
-            
-            # Aplicar ajuste de velocidade
-            if final_speed != 1.0:
-                try:
-                    import librosa
-                    audio = librosa.effects.time_stretch(audio, rate=1.0/final_speed)
-                except ImportError:
-                    logger.warning("librosa not available, speed adjustment skipped")
-                    final_speed = 1.0
-            
-            # Sample rate
-            sample_rate = getattr(tts_model.config, 'sampling_rate', 22050)
-            
-            # Criar diretórios
-            cache_dir = os.path.join(os.getcwd(), "cache")
-            temp_dir = os.path.join(os.getcwd(), "temp")
-            os.makedirs(cache_dir, exist_ok=True)
-            os.makedirs(temp_dir, exist_ok=True)
-            
-            # Gerar ID único
-            cache_id_hash = hashlib.sha256(f"{text}{lang}{model_key}{final_speed}".encode()).hexdigest()[:16]
-            
-            wav_path = os.path.join(temp_dir, f"tts_{cache_id_hash}.wav")
-            audio_path = os.path.join(cache_dir, f"tts_{cache_id_hash}.mp3")
-            
-            # Salvar WAV
-            write(wav_path, sample_rate, (audio * 32767).astype(np.int16))
-            
-            # Converter para MP3
-            audio_segment = AudioSegment.from_wav(wav_path)
-            audio_segment.export(audio_path, format="mp3", bitrate="128k")
-            
-            # Limpar WAV temporário
-            os.remove(wav_path)
-            
-            # Salvar no cache do banco
-            file_size = os.path.getsize(audio_path)
-            cache_id = db_manager.save_cache_entry(text, lang, model_key, final_speed, audio_path, file_size)
-            
-            logger.info(f"Audio generated and cached (ID: {cache_id}) for sync request")
-        
-        # ====== PARTE 2: ALINHAMENTO DE PALAVRAS ======
-        
-        # Verificar cache de alinhamento
-        alignment_cache = db_manager.get_alignment_cache(cache_id)
-        
-        if alignment_cache:
-            # Cache HIT - alinhamento já existe
-            words = alignment_cache['words']
-            logger.info(f"Alignment cache HIT: {len(words)} words (cache_id: {cache_id})")
-        else:
-            # Cache MISS - realizar alinhamento
-            logger.info(f"Alignment cache MISS - Running word alignment for cache_id: {cache_id}")
-            
-            try:
-                from .word_alignment import align_words
-                
-                # Realizar alinhamento
-                words = align_words(audio_path, text, lang)
-                
-                if words:
-                    # Salvar no cache de alinhamento
-                    db_manager.save_alignment_cache(cache_id, words)
-                    logger.info(f"Word alignment successful: {len(words)} words aligned")
-                else:
-                    logger.warning(f"Word alignment returned empty result for cache_id: {cache_id}")
-                    
-            except ImportError as e:
-                logger.error(f"faster-whisper not available: {e}")
-                words = []
-            except Exception as e:
-                logger.error(f"Error during word alignment: {e}", exc_info=True)
-                words = []
-        
-        # ====== PARTE 3: RESPOSTA ======
-        
-        # Gerar URL relativa do áudio
-        audio_filename = os.path.basename(audio_path)
-        audio_url = f"/audio/{audio_filename}"
-        
-        response_data = {
-            "audio_url": audio_url,
-            "language": lang,
-            "language_name": model_config["supported_languages"][lang],
-            "model_used": model_config["name"],
-            "words": words,
-            "word_count": len(words),
-            "alignment_available": len(words) > 0,
-            "cache_hit": cache_entry is not None,
-            "alignment_cache_hit": alignment_cache is not None
-        }
-        
-        logger.info(f"Sync response ready: {len(words)} words, cache_hit={cache_entry is not None}")
-        
-        return response_data
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in speak_sync for user {current_user.get('name')}: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/health")
-def health_check():
-    """Health check público (sem autenticação)"""
-    return {
-        "status": "healthy", 
-        "message": "Hebrew & Greek TTS API is running",
-        "version": "2.1.0",
-        "device": str(device),
-        "loaded_models": list(models.keys()),
-        "supported_languages": ["heb", "ell", "por"],
-        "authentication": "required for protected endpoints"
-    }
-
-@app.get("/audio/{filename}")
-def serve_audio(
-    filename: str,
-    current_user: dict = Depends(get_current_active_user)
-):
-    """
-    Serve arquivos de áudio do cache (protegido)
-    Usado pelo endpoint /speak_sync para retornar URLs de áudio
-    """
-    # Validar filename (segurança)
-    if not filename.endswith('.mp3') or '..' in filename or '/' in filename:
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    
-    cache_dir = os.path.join(os.getcwd(), "cache")
-    audio_path = os.path.join(cache_dir, filename)
-    
-    if not os.path.exists(audio_path):
-        raise HTTPException(status_code=404, detail="Audio file not found")
-    
-    return FileResponse(
-        audio_path,
-        media_type="audio/mpeg",
-        filename=filename
-    )
-
-@app.get("/health/detailed")
-def health_check_detailed(current_user: dict = Depends(get_current_active_user)):
-    """Health check detalhado (protegido)"""
-    return {
-        "status": "healthy", 
-        "message": "Hebrew & Greek TTS API is running (Authenticated)",
-        "user": current_user.get("name", "Unknown"),
-        "device": str(device),
-        "loaded_models": list(models.keys()),
-        "supported_languages": ["heb", "ell", "por"],
-        "rate_limit_info": {
-            "current": current_user.get("rate_limit_current", 0),
-            "max": current_user.get("rate_limit_max", 100)
-        }
-    }
+        logger.error(f"TTS generation failed: {e}")
+        raise HTTPException(status_code=500, detail=f"TTS generation failed: {e}")
 
 @app.get("/models")
-def get_models(current_user: dict = Depends(get_current_active_user)):
-    """Lista modelos (protegido)"""
+async def list_models():
+    """List available models"""
     return {
-        "models": MODEL_CONFIG,
-        "total_models": len(MODEL_CONFIG),
-        "user": current_user.get("name")
-    }
-
-@app.get("/languages") 
-def get_supported_languages(current_user: dict = Depends(get_current_active_user)):
-    """Lista idiomas (protegido)"""
-    all_languages = {}
-    for model_key, config in MODEL_CONFIG.items():
-        for lang_code, lang_name in config["supported_languages"].items():
-            all_languages[lang_code] = {
-                "name": lang_name,
-                "model": config["name"],
-                "model_key": model_key
+        "models": {
+            name: {
+                "name": config["name"],
+                "languages": config["supported_languages"],
+                "loaded": name in models
             }
-    
-    return {
-        "supported_languages": all_languages,
-        "total_languages": len(all_languages),
-        "user": current_user.get("name")
-    }
-
-@app.get("/voice-presets")
-def get_voice_presets(current_user: dict = Depends(get_current_active_user)):
-    """Lista presets (protegido)"""
-    return {
-        "presets": VOICE_PRESETS,
-        "user": current_user.get("name"),
-        "note": "MMS-TTS models have limited parameter support."
+            for name, config in MODEL_CONFIG.items()
+        },
+        "voice_presets": VOICE_PRESETS
     }
 
 # ============================================
-# ROTAS ADMINISTRATIVAS
+# STARTUP/SHUTDOWN
 # ============================================
 
-@app.get("/admin/users")
-def list_active_users(admin_user: dict = Depends(get_admin_user)):
-    """Lista usuários ativos (apenas admin)"""
-    with db_manager.get_connection() as conn:
-        active_sessions = conn.execute(
-            "SELECT COUNT(*) as count FROM sessions WHERE is_revoked = 0 AND expires_at > CURRENT_TIMESTAMP"
-        ).fetchone()["count"]
-        
-        active_users = conn.execute("""
-            SELECT id, username, email, rate_limit, is_admin, created_at, last_login
-            FROM users WHERE is_active = 1
-        """).fetchall()
+@app.on_event("startup")
+async def startup_event():
+    """Initialize on startup"""
+    logger.info("Starting MMS-TTS API with Sherpa-ONNX")
+    logger.info(f"Available models: {list(MODEL_CONFIG.keys())}")
     
-    return {
-        "active_sessions": active_sessions,
-        "active_users": [dict(user) for user in active_users],
-        "admin": admin_user.get("username", admin_user.get("name"))
-    }
-
-@app.post("/admin/generate-api-key")
-def generate_api_key(
-    name: str = Form(...),
-    permissions: str = Form(default="tts,models"),
-    rate_limit: int = Form(default=100),
-    expires_days: int = Form(default=None),
-    admin_user: dict = Depends(get_admin_user)
-):
-    """Gera nova API key (apenas admin)"""
+    # Initialize default users if configured
+    if os.getenv("AUTO_INIT_DEFAULT_DATA", "true").lower() == "true":
+        try:
+            logger.info("Initializing default users and data...")
+            results = db_manager.initialize_default_data()
+            if results:
+                logger.info(f"Default data initialized: {list(results.keys())}")
+        except Exception as e:
+            logger.warning(f"Failed to initialize default data: {e}")
+    
+    # Preload default model
     try:
-        permissions_list = [p.strip() for p in permissions.split(",")]
-        created_by = admin_user.get("user_id") if admin_user["type"] == "jwt" else None
-        
-        api_key = db_manager.create_api_key(
-            name=name,
-            permissions=permissions_list,
-            rate_limit=rate_limit,
-            expires_days=expires_days,
-            created_by=created_by
-        )
-        
-        return {
-            "message": f"API key '{name}' created successfully",
-            "api_key": api_key,
-            "name": name,
-            "permissions": permissions_list,
-            "rate_limit": rate_limit,
-            "expires_days": expires_days,
-            "created_by": admin_user.get("username", admin_user.get("name")),
-            "usage": {
-                "header": "X-API-Key",
-                "example": f"curl -H 'X-API-Key: {api_key}' https://your-api.com/speak"
-            }
-        }
+        logger.info("Preloading Hebrew model...")
+        load_sherpa_onnx_model("hebrew")
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.warning(f"Failed to preload Hebrew model: {e}")
 
-@app.post("/admin/create-user")
-def create_user(
-    request: Request,
-    username: str = Form(...),
-    password: str = Form(...),
-    email: str = Form(None),
-    permissions: str = Form("tts,models"),
-    is_admin: bool = Form(False),
-    rate_limit: int = Form(100),
-    admin_user: dict = Depends(get_admin_user)
-):
-    """Cria novo usuário (apenas admin)"""
-    try:
-        permissions_list = [p.strip() for p in permissions.split(",")]
-        
-        user_id = db_manager.create_user(
-            username=username,
-            password=password,
-            email=email,
-            permissions=permissions_list,
-            is_admin=is_admin,
-            rate_limit=rate_limit
-        )
-        
-        return {
-            "message": f"User {username} created successfully",
-            "user_id": user_id,
-            "created_by": admin_user.get("username", admin_user.get("name"))
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    logger.info("Shutting down...")
+    scheduler.shutdown()
+    models.clear()
 
-@app.post("/admin/create-api-key")
-def create_api_key(
-    request: Request,
-    name: str = Form(...),
-    permissions: str = Form("tts,models"),
-    rate_limit: int = Form(100),
-    expires_days: int = Form(None),
-    admin_user: dict = Depends(get_admin_user)
-):
-    """Cria nova API key (apenas admin)"""
-    try:
-        permissions_list = [p.strip() for p in permissions.split(",")]
-        created_by = admin_user.get("user_id") if admin_user["type"] == "jwt" else None
-        
-        api_key = db_manager.create_api_key(
-            name=name,
-            permissions=permissions_list,
-            rate_limit=rate_limit,
-            expires_days=expires_days,
-            created_by=created_by
-        )
-        
-        return {
-            "message": f"API key '{name}' created successfully",
-            "api_key": api_key,
-            "name": name,
-            "permissions": permissions_list,
-            "rate_limit": rate_limit,
-            "expires_days": expires_days,
-            "created_by": admin_user.get("username", admin_user.get("name")),
-            "usage": {
-                "header": "X-API-Key",
-                "example": f"curl -H 'X-API-Key: {api_key}' https://your-api.com/speak"
-            }
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.get("/admin/init-default-data")
-def initialize_default_data_route(admin_user: dict = Depends(get_admin_user)):
-    """Inicializa dados padrão com configuração via env vars (apenas admin)"""
-    try:
-        result = db_manager.initialize_default_data()
-        
-        # Não retornar senhas em produção
-        if os.getenv("ENVIRONMENT", "production") == "production":
-            # Limpar informações sensíveis
-            if result and "admin_user" in result and "credentials" in result["admin_user"]:
-                result["admin_user"]["credentials"] = "*** HIDDEN IN PRODUCTION ***"
-            if result and "demo_user" in result and "credentials" in result["demo_user"]:
-                result["demo_user"]["credentials"] = "*** HIDDEN IN PRODUCTION ***"
-            if result and "demo_api_key" in result and "key" in result["demo_api_key"]:
-                key = result["demo_api_key"]["key"]
-                result["demo_api_key"]["key"] = f"{key[:8]}...{key[-4:]}"
-            if result and "admin_api_key" in result and "key" in result["admin_api_key"]:
-                key = result["admin_api_key"]["key"]
-                result["admin_api_key"]["key"] = f"{key[:8]}...{key[-4:]}"
-        
-        return {
-            "message": "Default data initialization completed",
-            "initiated_by": admin_user.get("username", admin_user.get("name")),
-            "results": result
-        }
-        
-    except Exception as e:
-        logger.error(f"Error initializing default data: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/admin/system-info")
-def get_system_info(admin_user: dict = Depends(get_admin_user)):
-    """Informações do sistema (apenas admin)"""
-    with db_manager.get_connection() as conn:
-        # Estatísticas de usuários
-        users_count = conn.execute("SELECT COUNT(*) as count FROM users").fetchone()["count"]
-        active_users = conn.execute("SELECT COUNT(*) as count FROM users WHERE is_active = 1").fetchone()["count"]
-        
-        # Estatísticas de API keys
-        api_keys_count = conn.execute("SELECT COUNT(*) as count FROM api_keys").fetchone()["count"]
-        active_keys = conn.execute("SELECT COUNT(*) as count FROM api_keys WHERE is_active = 1").fetchone()["count"]
-        
-        # Estatísticas de sessões
-        active_sessions = conn.execute("SELECT COUNT(*) as count FROM sessions WHERE is_revoked = 0 AND expires_at > CURRENT_TIMESTAMP").fetchone()["count"]
-        
-        # Logs recentes
-        recent_logs = conn.execute("""
-            SELECT action, COUNT(*) as count 
-            FROM audit_logs 
-            WHERE timestamp > datetime('now', '-24 hours')
-            GROUP BY action
-            ORDER BY count DESC
-            LIMIT 10
-        """).fetchall()
-    
-    return {
-        "database": {
-            "path": db_manager.db_path,
-            "exists": os.path.exists(db_manager.db_path),
-            "size_mb": round(os.path.getsize(db_manager.db_path) / (1024*1024), 2) if os.path.exists(db_manager.db_path) else 0
-        },
-        "statistics": {
-            "users": {"total": users_count, "active": active_users},
-            "api_keys": {"total": api_keys_count, "active": active_keys},
-            "active_sessions": active_sessions
-        },
-        "recent_activity": [{"action": log["action"], "count": log["count"]} for log in recent_logs],
-        "configuration": {
-            "auto_init_enabled": os.getenv("AUTO_INIT_DEFAULT_DATA", "false"),
-            "environment": os.getenv("ENVIRONMENT", "production"),
-            "jwt_expire_minutes": ACCESS_TOKEN_EXPIRE_MINUTES
-        }
-    }
-
-@app.delete("/admin/revoke-api-key/{key_id}")
-def revoke_api_key(
-    key_id: int,
-    admin_user: dict = Depends(get_admin_user)
-):
-    """Revoga API key (apenas admin)"""
-    with db_manager.get_connection() as conn:
-        conn.execute(
-            "UPDATE api_keys SET is_active = 0 WHERE id = ?",
-            (key_id,)
-        )
-        conn.commit()
-    
-    return {"message": f"API key {key_id} revoked"}
-
-@app.get("/admin/cache/stats")
-def get_cache_stats(admin_user: dict = Depends(get_admin_user)):
-    """Estatísticas do cache (apenas admin)"""
-    stats = db_manager.get_cache_stats()
-    return {
-        "cache_stats": stats,
-        "max_size_mb": 100,
-        "usage_percentage": round((stats['total_size_mb'] / 100) * 100, 2) if stats['total_size_mb'] else 0,
-        "admin": admin_user.get("username", admin_user.get("name"))
-    }
-
-@app.post("/admin/cache/cleanup")
-def force_cache_cleanup(admin_user: dict = Depends(get_admin_user)):
-    """Força limpeza do cache (apenas admin)"""
-    result = db_manager.cleanup_cache(max_size_mb=100)
-    return {
-        "message": "Cache cleanup executed",
-        "result": result,
-        "admin": admin_user.get("username", admin_user.get("name"))
-    }
-
-@app.delete("/admin/cache/clear")
-def clear_all_cache(admin_user: dict = Depends(get_admin_user)):
-    """Limpa todo o cache (apenas admin)"""
-    try:
-        with db_manager.get_connection() as conn:
-            # Buscar todos os arquivos
-            entries = conn.execute('SELECT file_path FROM tts_cache').fetchall()
-            
-            removed_count = 0
-            for entry in entries:
-                if os.path.exists(entry['file_path']):
-                    try:
-                        os.remove(entry['file_path'])
-                        removed_count += 1
-                    except Exception as e:
-                        logger.error(f"Error removing {entry['file_path']}: {e}")
-            
-            # Limpar tabela
-            conn.execute('DELETE FROM tts_cache')
-            conn.commit()
-        
-        return {
-            "message": "All cache cleared",
-            "files_removed": removed_count,
-            "admin": admin_user.get("username", admin_user.get("name"))
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/admin/models/loaded")
-def get_loaded_models(admin_user: dict = Depends(get_admin_user)):
-    """Lista modelos carregados em memória (apenas admin)"""
-    loaded = []
-    for key, wrapper in models.items():
-        model_info = MODEL_CONFIG.get(key, {})
-        loaded.append({
-            "key": key,
-            "name": model_info.get("name", key),
-            "usage_count": wrapper.usage_count,
-            "last_used_seconds_ago": int(time.time() - wrapper.last_used),
-            "languages": list(model_info.get("supported_languages", {}).keys())
-        })
-    
-    # Ordenar por uso
-    loaded.sort(key=lambda x: x["usage_count"], reverse=True)
-    
-    return {
-        "loaded_models": loaded,
-        "total_loaded": len(loaded),
-        "max_models": MAX_LOADED_MODELS,
-        "available_models": list(MODEL_CONFIG.keys()),
-        "admin": admin_user.get("username", admin_user.get("name"))
-    }
-
-@app.post("/admin/models/unload/{model_key}")
-def unload_model(model_key: str, admin_user: dict = Depends(get_admin_user)):
-    """Descarrega modelo específico da memória (apenas admin)"""
-    if model_key not in models:
-        raise HTTPException(status_code=404, detail=f"Model '{model_key}' not loaded")
-    
-    wrapper = models[model_key]
-    usage_info = {
-        "usage_count": wrapper.usage_count,
-        "last_used_seconds_ago": int(time.time() - wrapper.last_used)
-    }
-    
-    del models[model_key]
-    
-    # Liberar memória
-    if has_cuda:
-        torch.cuda.empty_cache()
-    import gc
-    gc.collect()
-    
-    return {
-        "message": f"Model '{model_key}' unloaded",
-        "usage_info": usage_info,
-        "admin": admin_user.get("username", admin_user.get("name"))
-    }
-
-def cleanup_old_temp_files():
-    """Remove arquivos temporários antigos (> 1 hora)"""
-    temp_dir = os.path.join(os.getcwd(), "temp")
-    if not os.path.exists(temp_dir):
-        return
-    
-    now = time.time()
-    for filename in os.listdir(temp_dir):
-        filepath = os.path.join(temp_dir, filename)
-        if os.path.getmtime(filepath) < now - 3600:  # 1 hora
-            try:
-                os.remove(filepath)
-                logger.info(f"Removed old temp file: {filename}")
-            except Exception as e:
-                logger.error(f"Error removing {filename}: {e}")
-
-def cleanup_cache_if_needed():
-    """Verifica e limpa cache se ultrapassar 100MB"""
-    try:
-        result = db_manager.cleanup_cache(max_size_mb=100)
-        if result['cleaned']:
-            logger.info(f"Cache cleanup: removed {result['removed_count']} entries, freed {result['freed_mb']}MB")
-    except Exception as e:
-        logger.error(f"Error during cache cleanup: {e}")
-
-# Agendar limpeza a cada 30 minutos
-scheduler = BackgroundScheduler()
-scheduler.add_job(cleanup_old_temp_files, 'interval', minutes=30)
-scheduler.add_job(cleanup_cache_if_needed, 'interval', minutes=30)
-scheduler.start()
-
-# Manter o código existente para desenvolvimento local
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-

@@ -50,14 +50,12 @@ VOLUME ["/app/data"]
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/home/app/.cache/huggingface \
-    TRANSFORMERS_CACHE=/home/app/.cache/transformers \
-    TORCH_HOME=/home/app/.cache/torch \
-    CUDA_VISIBLE_DEVICES=""
+    ORT_TENSORRT_FP16_ENABLE=0 \
+    ORT_TENSORRT_ENGINE_CACHE_ENABLE=1
 
 # Criar diretórios de cache
 RUN mkdir -p /home/app/.cache/huggingface \
-             /home/app/.cache/transformers \
-             /home/app/.cache/torch
+             /home/app/.cache/onnx_models
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
@@ -76,8 +74,10 @@ CMD ["uvicorn", "app.multi_model_api:app", \
 
 # Labels otimizados
 LABEL maintainer="Hebrew-Greek TTS API" \
-      description="Lightweight Hebrew & Greek TTS API using MMS-TTS models" \
-      version="2.1" \
-      supported_languages="heb,ell" \
+      description="Ultra-lightweight Hebrew & Greek TTS API using MMS-TTS ONNX models" \
+      version="3.0-onnx" \
+      supported_languages="heb,ell,por" \
       base_image="python:3.10-slim" \
-      build_date="2025-06-27"
+      runtime="onnxruntime" \
+      model_size="~10-20MB per language" \
+      build_date="2025-01-23"

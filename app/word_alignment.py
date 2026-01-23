@@ -250,17 +250,22 @@ def normalize_for_matching(text: str) -> str:
 def fuzzy_match_words(
     word_segments: list, 
     original_text: str,
-    threshold: float = 0.55
+    threshold: float = 0.55,
+    audio_duration: float = 0.0
 ) -> list:
     """
     Novo algoritmo de alinhamento robusto (Anchor-Based)
     Garante que o output corresponda EXATAMENTE às palavras do texto original,
     preenchendo timestamps onde houver match confiável no Whisper.
     
+    Se Whisper falhar completamente (menos de 50% das palavras matched),
+    retorna timestamps estimados baseados no comprimento do texto.
+    
     Args:
         word_segments: Lista de segmentos do Whisper [{'text':..., 'start':..., 'end':...}]
         original_text: Texto fonte completo
         threshold: Score mínimo para considerar um match (0.55 é bom para palavras curtas)
+        audio_duration: Duração total do áudio em segundos (para estimativa)
         
     Returns:
         Lista de dicts alinhados 1:1 com as palavras do original_text
@@ -340,10 +345,32 @@ def fuzzy_match_words(
             o_token['matched'] = True
             t_cursor = best_t_idx + 1 
             
-    # 4. Construir resultado final
+    # 4. Verificar qualidade do alinhamento
+    matched_count = sum(1 for token in original_tokens if token['matched'])
+    match_ratio = matched_count / len(original_tokens) if original_tokens else 0
+    
+    # Se menos de 50% das palavras foram matched E temos duração do áudio,
+    # usar timestamps estimados baseados em distribuição uniforme
+    if match_ratio < 0.5 and audio_duration > 0:
+        logger.warning(f"⚠️  Low alignment quality ({match_ratio:.1%}), using estimated timestamps")
+        
+        # Calcular caracteres totais para distribuição proporcional
+        total_chars = sum(len(token['text']) for token in original_tokens)
+        
+        current_time = 0.0
+        for token in original_tokens:
+            # Tempo proporcional ao comprimento da palavra
+            word_duration = (len(token['text']) / total_chars) * audio_duration
+            token['start'] = round(current_time, 2)
+            token['end'] = round(current_time + word_duration, 2)
+            token['confidence'] = 0.3  # Baixa confiança para estimativas
+            token['matched'] = True  # Marcar como matched para incluir timestamps
+            current_time += word_duration
+    
+    # 5. Construir resultado final
     result = []
     for token in original_tokens:
-        # Só incluir timestamps se houve match
+        # Só incluir timestamps se houve match (ou estimativa)
         start = token['start'] if token['matched'] else -1.0
         end = token['end'] if token['matched'] else -1.0
         
@@ -392,8 +419,7 @@ def align_words(audio_path: str, text: str, lang: str) -> list:
             preprocessed_path,
             language=whisper_lang,
             word_timestamps=True,
-            vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500),
+            vad_filter=False,  # Desabilitar VAD - estava removendo todo o áudio
             beam_size=10,  # Aumentado para melhor precisão (era 5)
             best_of=5,
             patience=1.0, 
@@ -422,23 +448,30 @@ def align_words(audio_path: str, text: str, lang: str) -> list:
                             'probability': getattr(word, 'probability', 1.0)
                         })
         
+        # Obter duração do áudio
+        audio_duration = 0.0
+        try:
+            audio = AudioSegment.from_file(audio_path)
+            audio_duration = len(audio) / 1000.0  # Converter de ms para segundos
+        except Exception as e:
+            logger.warning(f"Could not get audio duration: {e}")
+        
         if not word_segments:
             logger.warning(f"⚠️  No words detected in audio")
+            # Mesmo sem Whisper, tentar gerar timestamps estimados
+            if audio_duration > 0:
+                logger.info("Generating estimated timestamps without Whisper")
+                return fuzzy_match_words([], text, threshold=0.55, audio_duration=audio_duration)
             return []
             
         logger.info(f"📝 Whisper detected {len(word_segments)} words")
+        logger.info(f"   Whisper words: {[w['text'] for w in word_segments]}")
         
         # NOVO ALINHAMENTO (Original-Centric)
-        # Passa a lista bruta do Whisper e o texto original
+        # Passa a lista bruta do Whisper e o texto original + duração para fallback
         result = fuzzy_match_words(
             word_segments, 
             text,
-            threshold=0.55
-        )
-            
-        return result
-        
-    except Exception as e:
-        logger.error(f"❌ Error during word alignment: {e}", exc_info=True)
-        return []
+            threshold=0.55,
+            audio_duration=audio_duration
 

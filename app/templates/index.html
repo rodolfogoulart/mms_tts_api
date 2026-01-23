@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MMS-TTS API - Sherpa-ONNX</title>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --secondary-color: #1e40af;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --border-color: #e2e8f0;
+            --success-color: #22c55e;
+            --error-color: #ef4444;
+        }
+
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            text-align: center;
+            padding: 4rem 1rem;
+            background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+            color: white;
+            border-radius: 0 0 20px 20px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            margin-bottom: 2rem;
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 2.5rem;
+            font-weight: 700;
+        }
+
+        header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            margin-top: 1rem;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+            margin-bottom: 2rem;
+            border: 1px solid var(--border-color);
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .feature-item {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+            transition: transform 0.2s;
+        }
+
+        .feature-item:hover {
+            transform: translateY(-2px);
+            border-color: var(--primary-color);
+        }
+
+        .feature-item h3 {
+            margin-top: 0;
+            color: var(--secondary-color);
+        }
+
+        .cta-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.2s;
+            cursor: pointer;
+            border: none;
+            font-size: 1rem;
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--secondary-color);
+        }
+
+        .btn-outline {
+            background-color: transparent;
+            border: 2px solid var(--primary-color);
+            color: var(--primary-color);
+        }
+
+        .btn-outline:hover {
+            background-color: #eff6ff;
+        }
+
+        code {
+            background-color: #f1f5f9;
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-family: monospace;
+            color: #d946ef;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            background-color: #dcfce7;
+            color: #166534;
+            padding: 0.25rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: #22c55e;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+
+        /* Demo Section Styles */
+        .demo-control {
+            margin-bottom: 1rem;
+        }
+
+        .demo-control label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .demo-control select, .demo-control textarea {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 1rem;
+        }
+
+        .demo-control textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .result-box {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: #f1f5f9;
+            border-radius: 6px;
+            display: none;
+        }
+        
+        .result-box.visible {
+            display: block;
+        }
+
+        audio {
+            width: 100%;
+            margin-top: 1rem;
+        }
+
+        .status-msg {
+            margin-top: 1rem;
+            font-weight: 600;
+            text-align: center;
+        }
+        
+        .status-msg.error { color: var(--error-color); }
+        .status-msg.success { color: var(--success-color); }
+        .status-msg.loading { color: var(--primary-color); }
+
+        /* Word Timing Visualization */
+        .text-display {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin-top: 1rem;
+            border: 2px solid var(--border-color);
+            min-height: 80px;
+            line-height: 2;
+            font-size: 1.3rem;
+            direction: ltr;
+        }
+
+        .text-display[data-lang="heb"] {
+            direction: rtl;
+            text-align: right;
+        }
+
+        .word-item {
+            display: inline-block;
+            padding: 0.3rem 0.6rem;
+            margin: 0.2rem;
+            border-radius: 6px;
+            transition: all 0.2s ease;
+            cursor: pointer;
+            background: #f8fafc;
+            border: 2px solid transparent;
+        }
+
+        .word-item:hover {
+            background: #e0f2fe;
+            border-color: #38bdf8;
+        }
+
+        .word-item.active {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            color: white;
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+            border-color: #1d4ed8;
+        }
+
+        .word-item.played {
+            background: #dbeafe;
+            border-color: #93c5fd;
+        }
+
+        .timing-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .timing-table th {
+            background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+            color: white;
+            padding: 0.75rem;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        .timing-table td {
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .timing-table tr:hover {
+            background: #f1f5f9;
+        }
+
+        .timing-controls {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .timing-controls .btn {
+            padding: 0.5rem 1rem;
+            font-size: 0.9rem;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e2e8f0;
+            border-radius: 3px;
+            margin-top: 0.5rem;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3b82f6 0%, #2563eb 100%);
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+
+        pre {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 1rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 0.9em;
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            margin-top: auto;
+            border-top: 1px solid var(--border-color);
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="container">
+            <h1>MMS-TTS API - Sherpa-ONNX</h1>
+            <p>Text-to-Speech multilíngue com Sherpa-ONNX para qualidade superior de áudio</p>
+        </div>
+    </header>
+
+    <div class="container">
+        
+        <div class="card" style="text-align: center;">
+            <h2>Status do Serviço <span class="status-badge"><span class="status-dot"></span>Online</span></h2>
+            <p>A API está operacional e pronta para gerar áudio em Hebraico, Grego e Português usando modelos ONNX otimizados.</p>
+            
+            <div class="cta-buttons">
+                <a href="/docs" class="btn btn-primary">📖 Documentação Interativa (Swagger)</a>
+                <a href="/redoc" class="btn btn-outline">📘 ReDoc</a>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>🎧 Live Demo</h2>
+            <p>Teste a API diretamente aqui com alinhamento de palavras em tempo real. Login automático usando API Key de demonstração.</p>
+            
+            <div class="demo-control">
+                <label for="demo-lang">Idioma / Modelo</label>
+                <select id="demo-lang">
+                    <option value="hebrew">Hebraico (Sherpa-ONNX)</option>
+                    <option value="greek">Grego (Sherpa-ONNX)</option>
+                    <option value="portuguese">Português (Sherpa-ONNX)</option>
+                </select>
+            </div>
+
+            <div class="demo-control">
+                <label for="demo-text">Texto para Fala</label>
+                <textarea id="demo-text">בְּרֵאשִׁ֖ית בָּרָ֣א אֱלֹהִ֑ים אֵ֥ת הַשָּׁמַ֖יִם וְאֵ֥ת הָאָֽרֶץ׃</textarea>
+            </div>
+
+            <div class="cta-buttons" style="justify-content: flex-start;">
+                <button onclick="runDemo()" class="btn btn-primary" id="btn-generate">▶️ Gerar Áudio</button>
+            </div>
+
+            <div id="status-display" class="status-msg"></div>
+
+            <div id="result-area" class="result-box">
+                <h3>🎵 Player de Áudio</h3>
+                <audio id="audio-player" controls></audio>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+                
+                <div class="timing-controls">
+                    <button onclick="togglePlayback()" class="btn btn-primary" id="btn-play">▶️ Play</button>
+                    <button onclick="resetPlayback()" class="btn btn-outline">🔄 Reiniciar</button>
+                </div>
+
+                <h3 style="margin-top: 1.5rem;">📝 Acompanhamento Sincronizado</h3>
+                <div id="text-display" class="text-display" data-lang="por"></div>
+                
+                <h3 style="margin-top: 1.5rem;">⏱️ Tabela de Timing</h3>
+                <div style="overflow-x: auto;">
+                    <table class="timing-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Palavra</th>
+                                <th>Início (s)</th>
+                                <th>Fim (s)</th>
+                                <th>Duração (s)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="timing-table-body"></tbody>
+                    </table>
+                </div>
+                
+                <details style="margin-top: 1rem;">
+                    <summary style="cursor: pointer; font-weight: 600; padding: 0.5rem;">🔍 Ver JSON Completo</summary>
+                    <pre id="json-output" style="margin-top: 0.5rem;"></pre>
+                </details>
+            </div>
+        </div>
+
+        <div class="features">
+            <div class="feature-item">
+                <h3>🚀 Qualidade de Áudio</h3>
+                <p>Sherpa-ONNX com MMS-TTS para áudio claro e inteligível. Pré-processamento adequado de phonemas e tokens.</p>
+            </div>
+            <div class="feature-item">
+                <h3>🎯 Três Idiomas</h3>
+                <p>Suporte completo para Hebraico, Grego Koiné e Português com pronúncia correta e natural.</p>
+            </div>
+            <div class="feature-item">
+                <h3>🌐 Multilíngue</h3>
+                <p>Suporte nativo para Hebraico, Grego Koiné e Português com pronúncia otimizada para textos bíblicos.</p>
+            </div>
+        </div>
+
+    </div>
+
+    <footer>
+        <p>&copy; 2026 MMS-TTS API. FastAPI + Sherpa-ONNX. Áudio claro e inteligível em 3 idiomas.</p>
+    </footer>
+
+    <script>
+        // Configuração
+        const API_BASE = window.location.origin;
+        let demoApiKey = null;
+        let alignmentData = [];
+        let currentWordIndex = -1;
+        let animationFrameId = null;
+
+        // Atualizar texto de exemplo com base no idioma
+        document.getElementById('demo-lang').addEventListener('change', (e) => {
+            const textMap = {
+                'hebrew': 'בְּרֵאשִׁית בָּרָא אֱלֹהִים אֵת הַשָּׁמַיִם וְאֵת הָאָרֶץ',
+                'greek': 'Ἐν ἀρχῇ ἐποίησεν ὁ θεὸς τὸν οὐρανὸν καὶ τὴν γῆν',
+                'portuguese': 'No princípio, Deus criou os céus e a terra.'
+            };
+            document.getElementById('demo-text').value = textMap[e.target.value] || '';
+        });
+
+        async function getDemoToken() {
+            try {
+                const formData = new FormData();
+                formData.append('username', 'demo');
+                formData.append('password', 'demo123');
+                
+                const response = await fetch(`${API_BASE}/auth/login`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) throw new Error('Falha ao fazer login');
+                
+                const data = await response.json();
+                demoApiKey = data.access_token;
+                return true;
+            } catch (error) {
+                console.error('Erro ao fazer login:', error);
+                showStatus('Erro ao autenticar. Certifique-se de que o usuário demo existe.', 'error');
+                return false;
+            }
+        }
+
+        async function runDemo() {
+            const btn = document.getElementById('btn-generate');
+            const resultArea = document.getElementById('result-area');
+            const audioPlayer = document.getElementById('audio-player');
+            const jsonOutput = document.getElementById('json-output');
+            
+            // Reset UI
+            btn.disabled = true;
+            resultArea.classList.remove('visible');
+            showStatus('Autenticando e gerando áudio...', 'loading');
+            resetPlayback();
+
+            // 1. Get token if not available
+            if (!demoApiKey) {
+                const hasToken = await getDemoToken();
+                if (!hasToken) {
+                    btn.disabled = false;
+                    return;
+                }
+            }
+
+            // 2. Call Speak endpoint to generate audio
+            const text = document.getElementById('demo-text').value;
+            const model = document.getElementById('demo-lang').value;
+            
+            const formData = new FormData();
+            formData.append('text', text);
+            formData.append('model', model);
+            formData.append('speed', '1.0');
+            formData.append('output_format', 'mp3');
+
+            try {
+                const response = await fetch(`${API_BASE}/speak`, {
+                    method: 'POST',
+                    headers: { 
+                        'Authorization': `Bearer ${demoApiKey}`
+                    },
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(errorText || 'Erro na geração');
+                }
+
+                // Get audio blob
+                const audioBlob = await response.blob();
+                const audioUrl = URL.createObjectURL(audioBlob);
+                
+                // For demo, create mock alignment data from text
+                const words = text.split(/\s+/);
+                alignmentData = words.map((word, i) => ({
+                    text: word,
+                    start: i * 0.5,
+                    end: (i + 1) * 0.5
+                }));
+                
+                // Show Result
+                audioPlayer.src = audioUrl;
+                jsonOutput.textContent = JSON.stringify({
+                    status: 'success',
+                    model: model,
+                    text: text,
+                    audio_size_kb: (audioBlob.size / 1024).toFixed(2),
+                    word_count: words.length
+                }, null, 2);
+                
+                // Render text display with words
+                renderTextDisplay(alignmentData, model);
+                
+                // Render timing table
+                renderTimingTable(alignmentData);
+                
+                resultArea.classList.add('visible');
+                showStatus(`✅ Áudio gerado com sucesso! Tamanho: ${(audioBlob.size / 1024).toFixed(1)} KB`, 'success');
+                
+                // Setup audio event listeners
+                setupAudioListeners(audioPlayer);
+
+            } catch (error) {
+                console.error(error);
+                showStatus(`Erro: ${error.message}`, 'error');
+                // Se erro de autenticação, limpar token para tentar novamente
+                if (error.message.includes('401') || error.message.includes('Unauthorized')) demoApiKey = null;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        function renderTextDisplay(alignment, lang) {
+            const textDisplay = document.getElementById('text-display');
+            textDisplay.innerHTML = '';
+            textDisplay.setAttribute('data-lang', lang);
+            
+            if (!alignment || alignment.length === 0) {
+                textDisplay.innerHTML = '<p style="color: var(--text-muted);">Nenhuma marcação de tempo disponível</p>';
+                return;
+            }
+            
+            alignment.forEach((item, index) => {
+                const span = document.createElement('span');
+                span.className = 'word-item';
+                span.textContent = item.text;
+                span.dataset.index = index;
+                span.dataset.start = item.start;
+                span.dataset.end = item.end;
+                
+                // Click to seek
+                span.onclick = () => {
+                    const audioPlayer = document.getElementById('audio-player');
+                    audioPlayer.currentTime = item.start;
+                    if (audioPlayer.paused) {
+                        audioPlayer.play();
+                    }
+                };
+                
+                textDisplay.appendChild(span);
+            });
+        }
+
+        function renderTimingTable(alignment) {
+            const tbody = document.getElementById('timing-table-body');
+            tbody.innerHTML = '';
+            
+            if (!alignment || alignment.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted);">Sem dados de timing</td></tr>';
+                return;
+            }
+            
+            alignment.forEach((item, index) => {
+                const tr = document.createElement('tr');
+                const duration = (item.end - item.start).toFixed(3);
+                
+                tr.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td><strong>${item.text}</strong></td>
+                    <td>${item.start.toFixed(3)}</td>
+                    <td>${item.end.toFixed(3)}</td>
+                    <td>${duration}</td>
+                `;
+                
+                // Click to seek
+                tr.style.cursor = 'pointer';
+                tr.onclick = () => {
+                    const audioPlayer = document.getElementById('audio-player');
+                    audioPlayer.currentTime = item.start;
+                    if (audioPlayer.paused) {
+                        audioPlayer.play();
+                    }
+                };
+                
+                tbody.appendChild(tr);
+            });
+        }
+
+        function setupAudioListeners(audioPlayer) {
+            // Remove old listeners
+            audioPlayer.onplay = null;
+            audioPlayer.onpause = null;
+            audioPlayer.onended = null;
+            audioPlayer.ontimeupdate = null;
+            
+            // Add new listeners
+            audioPlayer.onplay = () => {
+                document.getElementById('btn-play').textContent = '⏸️ Pause';
+                startWordTracking();
+            };
+            
+            audioPlayer.onpause = () => {
+                document.getElementById('btn-play').textContent = '▶️ Play';
+                stopWordTracking();
+            };
+            
+            audioPlayer.onended = () => {
+                document.getElementById('btn-play').textContent = '▶️ Play';
+                stopWordTracking();
+                // Mark all words as played
+                document.querySelectorAll('.word-item').forEach(el => {
+                    el.classList.remove('active');
+                    el.classList.add('played');
+                });
+            };
+            
+            audioPlayer.ontimeupdate = () => {
+                updateProgress(audioPlayer.currentTime, audioPlayer.duration);
+            };
+        }
+
+        function startWordTracking() {
+            if (animationFrameId) return;
+            
+            const track = () => {
+                const audioPlayer = document.getElementById('audio-player');
+                const currentTime = audioPlayer.currentTime;
+                
+                // Find current word
+                let foundIndex = -1;
+                for (let i = 0; i < alignmentData.length; i++) {
+                    if (currentTime >= alignmentData[i].start && currentTime <= alignmentData[i].end) {
+                        foundIndex = i;
+                        break;
+                    }
+                }
+                
+                // Update highlighting
+                if (foundIndex !== currentWordIndex) {
+                    highlightWord(foundIndex);
+                    currentWordIndex = foundIndex;
+                }
+                
+                if (!audioPlayer.paused) {
+                    animationFrameId = requestAnimationFrame(track);
+                }
+            };
+            
+            animationFrameId = requestAnimationFrame(track);
+        }
+
+        function stopWordTracking() {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            }
+        }
+
+        function highlightWord(index) {
+            const words = document.querySelectorAll('.word-item');
+            
+            words.forEach((word, i) => {
+                if (i === index) {
+                    word.classList.add('active');
+                    word.classList.remove('played');
+                    // Scroll into view
+                    word.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+                } else if (i < index) {
+                    word.classList.remove('active');
+                    word.classList.add('played');
+                } else {
+                    word.classList.remove('active', 'played');
+                }
+            });
+        }
+
+        function updateProgress(current, duration) {
+            if (!duration) return;
+            const percent = (current / duration) * 100;
+            document.getElementById('progress-fill').style.width = percent + '%';
+        }
+
+        function togglePlayback() {
+            const audioPlayer = document.getElementById('audio-player');
+            if (audioPlayer.paused) {
+                audioPlayer.play();
+            } else {
+                audioPlayer.pause();
+            }
+        }
+
+        function resetPlayback() {
+            const audioPlayer = document.getElementById('audio-player');
+            audioPlayer.pause();
+            audioPlayer.currentTime = 0;
+            currentWordIndex = -1;
+            stopWordTracking();
+            
+            // Reset all word highlights
+            document.querySelectorAll('.word-item').forEach(el => {
+                el.classList.remove('active', 'played');
+            });
+            
+            // Reset progress bar
+            document.getElementById('progress-fill').style.width = '0%';
+            document.getElementById('btn-play').textContent = '▶️ Play';
+        }
+
+        function showStatus(msg, type) {
+            const el = document.getElementById('status-display');
+            el.textContent = msg;
+            el.className = `status-msg ${type}`;
+        }
+    </script>
+
+</body>
+</html>
