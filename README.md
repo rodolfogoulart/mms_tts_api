@@ -36,14 +36,62 @@ Agora com suporte a **sincronização palavra-por-palavra**!
 
 ## 🚀 **Início Rápido**
 
-### Docker (Recomendado)
+### Docker Compose (Recomendado)
+
+#### **🖥️ Desenvolvimento Local com GPU NVIDIA**
+Para rodar no seu notebook/desktop com GPU NVIDIA:
+
+```bash
+# Pré-requisito: NVIDIA Container Toolkit instalado
+# Verificar GPU disponível
+docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi
+
+# Build e iniciar com GPU CUDA
+docker-compose -f docker-compose.local.yml up --build
+
+# Rodar em background
+docker-compose -f docker-compose.local.yml up -d
+
+# Ver logs em tempo real
+docker-compose -f docker-compose.local.yml logs -f
+
+# Parar
+docker-compose -f docker-compose.local.yml down
+
+# Testar
+curl http://localhost:8000/health
+```
+
+**Configurações GPU (docker-compose.local.yml):**
+- ✅ Whisper model: `medium` (~1.5GB VRAM, 90-98% acurácia)
+- ✅ Device: `cuda` (GPU NVIDIA)
+- ✅ Compute type: `float16` (otimizado para GPU)
+- ✅ Fallback automático para CPU caso CUDA não disponível
+
+#### **☁️ Produção VPS/Cloud (CPU)**
+Para rodar em VPS sem GPU (ex: Oracle Cloud):
+
+```bash
+# Build e iniciar (CPU-only)
+docker-compose up --build
+
+# Rodar em background
+docker-compose up -d
+
+# Testar
+curl http://localhost:8000/health
+```
+
+**Configurações CPU (Dockerfile.coolify):**
+- ✅ Whisper model: `small` (~500MB, 85-95% acurácia)
+- ✅ Device: `cpu` (ARM64 otimizado)
+- ✅ Compute type: `int8` (quantização para economia de memória)
+
+### Docker Manual
 
 ```bash
 # Build da imagem
 docker build -t hebrew-greek-tts .
-
-# Windows (PowerShell)
-docker-compose up --build
 
 # Executar API
 docker run -p 8000:8000 hebrew-greek-tts
@@ -169,17 +217,58 @@ print('✅ Áudio em grego gerado: test_greek.mp3')
 ## 🔧 **Configuração Avançada**
 
 ### Variáveis de Ambiente
+
+#### **Para Docker Compose Local (GPU):**
+Edite `docker-compose.local.yml`:
+```yaml
+environment:
+  - WHISPER_DEVICE=cuda          # Usar GPU NVIDIA
+  - WHISPER_COMPUTE_TYPE=float16 # Otimizado para GPU
+  - WHISPER_MODEL=medium         # Alta acurácia (~1.5GB VRAM)
+  - LOG_LEVEL=info               # debug, info, warning, error
+```
+
+#### **Para Docker Compose Produção (CPU):**
+Use o `Dockerfile.coolify` com variáveis já configuradas:
 ```bash
-export CUDA_VISIBLE_DEVICES=0  # GPU específica
+export CUDA_VISIBLE_DEVICES=0  # GPU específica (se disponível)
 export HF_HOME=/path/to/cache  # Cache dos modelos
 ```
+
+#### **Configurações Whisper:**
+| Variável | Valores | Descrição |
+|----------|---------|-----------|
+| `WHISPER_MODEL` | `tiny`, `base`, `small`, `medium`, `large` | Tamanho do modelo |
+| `WHISPER_DEVICE` | `cpu`, `cuda` | Dispositivo de processamento |
+| `WHISPER_COMPUTE_TYPE` | `int8`, `float16`, `float32` | Tipo de computação |
 
 ### Modelos em Cache
 Os modelos são baixados automaticamente na primeira execução:
 - `facebook/mms-tts-heb` (~36MB)
 - `facebook/mms-tts-ell` (~36MB)
+- `faster-whisper` (small: ~500MB, medium: ~1.5GB)
 
-## � **Solução de Problemas**
+## 🛠️ **Solução de Problemas**
+
+### GPU NVIDIA não detectada (Docker Compose Local)
+```bash
+# 1. Verificar NVIDIA Container Toolkit
+docker run --rm --gpus all nvidia/cuda:11.8.0-base-ubuntu22.04 nvidia-smi
+
+# 2. Se não instalado, instalar NVIDIA Container Toolkit
+# Ubuntu/Debian:
+distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
+curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
+curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
+  sudo tee /etc/apt/sources.list.d/nvidia-docker.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo systemctl restart docker
+
+# 3. Verificar CUDA no host
+nvidia-smi
+
+# 4. Fallback automático: Se GPU não disponível, usa CPU automaticamente
+```
 
 ### Erro: "python-multipart" 
 ```bash
@@ -193,9 +282,21 @@ df -h
 
 # Limpar cache
 rm -rf ~/.cache/huggingface/
+
+# Limpar volumes Docker
+docker-compose -f docker-compose.local.yml down -v
 ```
 
-### GPU não detectada
+### Whisper model muito lento
+```bash
+# Reduzir tamanho do modelo
+# Edite docker-compose.local.yml:
+environment:
+  - WHISPER_MODEL=small  # Ao invés de medium
+  - WHISPER_COMPUTE_TYPE=int8  # Ao invés de float16
+```
+
+### GPU não detectada (execução local)
 ```bash
 # Verificar CUDA
 python -c "import torch; print(torch.cuda.is_available())"

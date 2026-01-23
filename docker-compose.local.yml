@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  hebrew-greek-tts-local:
+    build: 
+      context: .
+      dockerfile: Dockerfile.local
+    container_name: hebrew-greek-tts-local
+    ports:
+      - "8000:8000"
+    volumes:
+      # Código fonte local (Hot-Reload / Dev Mode)
+      - ./:/app
+      # Cache persistente para modelos TTS (evita re-download)
+      - hf-cache-local:/app/.cache/huggingface
+      # Cache para Whisper (word alignment)
+      - whisper-cache-local:/app/.cache/whisper
+      # Banco de dados SQLite (persistente)
+      - ./data:/app/data
+      # Logs persistentes
+      - ./logs:/app/logs
+      # Diretório temporário (opcional)
+      - ./temp:/app/temp
+    environment:
+      # Python
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=info
+      
+      # Whisper CUDA (Notebook Local)
+      - WHISPER_CACHE_DIR=/app/.cache/whisper
+      - WHISPER_DEVICE=cuda
+      - WHISPER_COMPUTE_TYPE=float16
+      - WHISPER_MODEL=medium
+      
+      # Hugging Face cache
+      - HF_HOME=/app/.cache/huggingface
+      
+      # Auto-initialize default data
+      - AUTO_INIT_DEFAULT_DATA=true
+      - CREATE_DEFAULT_USERS=true
+      - ENVIRONMENT=development
+      
+      # JWT (opcional, ajuste conforme necessário)
+      - JWT_SECRET_KEY=your-super-secret-jwt-key-change-in-production-12345
+      - TOKEN_EXPIRE_MINUTES=60
+      
+      # Database
+      - DATABASE_PATH=/app/data/tts_auth.db
+      
+      # Usuários (opcional, ajuste conforme necessário)
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=admin123
+      - DEMO_USERNAME=demo
+      - DEMO_PASSWORD=demo123
+    
+    # Configuração para GPU NVIDIA (requer nvidia-docker/nvidia-container-toolkit)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1  # Usar 1 GPU NVIDIA
+              capabilities: [gpu]
+    
+    restart: unless-stopped
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 120s  # Whisper medium pode levar mais tempo no primeiro load
+
+volumes:
+  hf-cache-local:
+    driver: local
+  whisper-cache-local:
+    driver: local
