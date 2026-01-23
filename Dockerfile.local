@@ -12,45 +12,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Definir diretório de trabalho
 WORKDIR /build
 
-# Clonar repositório completo
-ARG REPO_URL=https://github.com/rodolfogoulart/mms_tts_api.git
-ARG BRANCH=whisper-local
-
-# Usar cache busting para forçar re-clone quando necessário
-ARG CACHEBUST=1
-
-RUN git clone --depth 1 --branch ${BRANCH} ${REPO_URL} ./repo
+# Copiar arquivos locais
+COPY requirements.txt .
 
 # Criar ambiente virtual
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Instalar dependências Python do repositório clonado
-RUN cd ./repo && \
-    if [ -f "requirements.txt" ]; then \
-        pip install --no-cache-dir --upgrade pip setuptools wheel && \
-        pip install --no-cache-dir -r requirements.txt; \
-    else \
-        pip install --no-cache-dir --upgrade pip && \
-        pip install --no-cache-dir \
-            transformers==4.35.2 \
-            torch==2.2.0 \
-            torchaudio==2.2.0 \
-            accelerate==0.25.0 \
-            fastapi==0.104.1 \
-            uvicorn[standard]==0.24.0 \
-            python-multipart==0.0.6 \
-            pydub==0.25.1 \
-            librosa==0.10.1 \
-            scipy==1.11.4 \
-            numpy==1.24.4 \
-            requests==2.31.0 \
-            aiofiles==23.2.1 \
-            soundfile==0.12.1 \
-            PyJWT==2.8.0 \
-            python-jose[cryptography]==3.3.0 \
-            passlib[bcrypt]==1.7.4; \
-    fi && \
+# Instalar dependências Python
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt && \
     pip cache purge
 
 # ============================================
@@ -71,8 +42,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copiar código da aplicação do repositório clonado
-COPY --from=builder /build/repo /app
+# Copiar código da aplicação local
+COPY . /app
 
 # Criar usuário não-root
 RUN useradd --create-home --uid 1000 app && \
@@ -96,7 +67,7 @@ RUN echo '#!/bin/sh' > /entrypoint.sh && \
 
 WORKDIR /app
 
-VOLUME ["/app/data"]
+VOLUME ["/app/data", "/app/logs", "/app/temp", "/app/.cache/huggingface", "/app/.cache/whisper"]
 
 # Variáveis de ambiente Python
 ENV PYTHONUNBUFFERED=1 \

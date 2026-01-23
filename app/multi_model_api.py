@@ -213,12 +213,14 @@ def load_model(model_key: str):
         logger.info(f"Model '{least_used_key}' unloaded, memory freed")
     
     config = MODEL_CONFIG[model_key]
-    logger.info(f"Loading model with accelerate: {config['name']} (dtype: {torch_dtype})")
+    # Carregar modelo sempre como float32 para evitar erros de precisão mista
+    # VITS tem operações internas (Spline) que falham com FP16
+    safe_dtype = torch.float32
+    logger.info(f"Loading model with accelerate: {config['name']} (dtype: forced to {safe_dtype})")
     
-    # Carregar modelo com dtype correto para CPU/GPU
     model = VitsModel.from_pretrained(
         config["model_id"],
-        torch_dtype=torch_dtype,
+        torch_dtype=safe_dtype,
     )
     
     tokenizer = AutoTokenizer.from_pretrained(config["model_id"])
@@ -471,13 +473,12 @@ def speak(
         
         # Gerar áudio usando MMS-TTS com accelerate
         inputs = tts_tokenizer(text, return_tensors="pt")
+        inputs = {k: v.to(accelerator.device) for k, v in inputs.items()}
         
         with torch.no_grad():
-            if accelerator.mixed_precision != "no":
-                with accelerator.autocast():
-                    output = tts_model(**inputs)
-            else:
-                output = tts_model(**inputs)
+            # FIX: VITS model has issues with autocast combined with index_put
+            # Better to let accelerator handle types or use model's native precision
+            output = tts_model(**inputs)
             
             # Extrair tensor de áudio
             if hasattr(output, 'waveform'):
@@ -629,13 +630,12 @@ def speak_sync(
             
             # Gerar áudio
             inputs = tts_tokenizer(text, return_tensors="pt")
+            inputs = {k: v.to(accelerator.device) for k, v in inputs.items()}
             
             with torch.no_grad():
-                if accelerator.mixed_precision != "no":
-                    with accelerator.autocast():
-                        output = tts_model(**inputs)
-                else:
-                    output = tts_model(**inputs)
+                # FIX: VITS model has issues with autocast combined with index_put
+                # Better to let accelerator handle types or use model's native precision
+                output = tts_model(**inputs)
                 
                 if hasattr(output, 'waveform'):
                     audio_tensor = output.waveform

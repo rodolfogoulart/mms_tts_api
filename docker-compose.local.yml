@@ -9,6 +9,8 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      # Código fonte local (Hot-Reload / Dev Mode)
+      - ./:/app
       # Cache persistente para modelos TTS (evita re-download)
       - hf-cache-local:/app/.cache/huggingface
       # Cache para Whisper (word alignment)

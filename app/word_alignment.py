@@ -202,254 +202,219 @@ def preprocess_audio(audio_path: str) -> str:
 def normalize_for_matching(text: str) -> str:
     """
     Normaliza texto APENAS para matching fuzzy (não para exibição)
-    Remove acentos/diacríticos mas preserva estrutura das palavras
+    Remove acentos/diacríticos e caracteres especiais multilingues
+    
+    Suporte: Hebraico (Niqqud), Grego (Acentos), Português (Acentos)
     """
+    if not text:
+        return ""
+    
     # Decompor caracteres Unicode (separar base + diacríticos)
     decomposed = unicodedata.normalize('NFD', text)
     
-    # Remover apenas marcas diacríticas (categoria Mn = Nonspacing Mark)
-    # Mantém letras base intactas
-    base_text = ''.join(
-        char for char in decomposed 
-        if unicodedata.category(char) != 'Mn'
-    )
+    # Lista extendida de caracteres a remover (Mantendo apenas letras base e números)
+    # Remove:
+    # - Mn: Nonspacing Mark (Acentos, Niqqud, Cantillation)
+    # - Mc: Spacing Combining Mark
+    # - Me: Enclosing Mark
+    # - Po: Punctuation, Other (incluindo Maqaf hebraico, hifens)
+    # - Pd: Punctuation, Dash
+    
+    base_text = ""
+    for char in decomposed:
+        cat = unicodedata.category(char)
+        # Manter letras (L*), números (N*) e espaços (Z*)
+        if cat.startswith('L') or cat.startswith('N') or cat.startswith('Z'):
+            base_text += char
+        # Casos especiais que QUEREMOS remover
+        elif char == '\u05BE': # HEBREW PUNCTUATION MAQAF
+            base_text += " "   # Substituir por espaço para separar palavras compostas? Não, melhor ignorar para matching aglutinado ou separar?
+                               # O Whisper tende a separar. Vamos ignorar o caracter para aglutinar ou splitar?
+                               # "Al-Penei" -> Whisper: "Al Penei" ou "Alpenei"? 
+                               # Se removermos, "Al-Penei" vira "AlPenei". 
+                               # Melhor substituir por espaço se for separador de palavras real, ou remover se for aglutinador.
+                               # No hebraico Maqaf une palavras. Vamos remover para 'colar' ou substituir por espaço?
+                               # Vamos remover pontuações.
+            pass
+        elif char in ('-', '–', '—', '_'): # Hifens diversos
+            pass
     
     # Recompor e converter para minúsculas
-    return unicodedata.normalize('NFC', base_text).lower()
-
+    normalized = unicodedata.normalize('NFC', base_text).lower()
+    
+    # Remover qualquer caracter não-alfanumérico restante (segurança)
+    normalized = re.sub(r'[^\w\s]', '', normalized)
+    
+    return normalized
 
 def fuzzy_match_words(
-    transcribed_words: List[str], 
+    word_segments: list, 
     original_text: str,
-    threshold: float = 0.4  # ← REDUZIDO de 0.5 para 0.4
-) -> Tuple[List[str], List[float], List[Tuple[int, int]]]:
+    threshold: float = 0.55
+) -> list:
     """
-    Faz matching avançado entre palavras transcritas e texto original.
-    Otimizado para hebraico/grego com algoritmo melhorado.
-    
-    Algoritmo:
-    1. Separa palavras do texto original (preservando Unicode)
-    2. Normaliza ambas as listas (remove diacríticos para comparação)
-    3. Para cada palavra transcrita:
-       a. Busca melhor match em janela deslizante (EXPANDIDA para 10 palavras)
-       b. Calcula similaridade com SequenceMatcher (Ratcliff-Obershelp)
-       c. Aceita match se ratio >= threshold OU é palavra sequencial
-    4. Retorna palavras ORIGINAIS (com Unicode preservado)
-    
-    Performance:
-    - Janela de 10 palavras: O(10n) ≈ O(n) ainda aceitável
-    - SequenceMatcher é otimizado em C (rápido)
-    - Pre-normalization cache evita recomputação
+    Novo algoritmo de alinhamento robusto (Anchor-Based)
+    Garante que o output corresponda EXATAMENTE às palavras do texto original,
+    preenchendo timestamps onde houver match confiável no Whisper.
     
     Args:
-        transcribed_words: Palavras do Whisper (podem ter erros)
-        original_text: Texto original com diacríticos
-        threshold: Similaridade mínima (0.0-1.0), padrão 0.4
-    
+        word_segments: Lista de segmentos do Whisper [{'text':..., 'start':..., 'end':...}]
+        original_text: Texto fonte completo
+        threshold: Score mínimo para considerar um match (0.55 é bom para palavras curtas)
+        
     Returns:
-        Tupla: (palavras matched, scores de confiança, posições no texto)
+        Lista de dicts alinhados 1:1 com as palavras do original_text
     """
-    # Separar palavras do texto original (preservando Unicode) COM POSIÇÕES
-    original_words = []
-    word_positions = []
     
+    # 1. Tokenizar texto original mantendo posições reais
+    # \S+ captura qualquer sequência que não seja espaço em branco (inclui pontuação grudada)
+    original_tokens = []
     for match in re.finditer(r'\S+', original_text):
-        original_words.append(match.group())
-        word_positions.append((match.start(), match.end()))
+        token_text = match.group()
+        original_tokens.append({
+            'text': token_text,                 # Texto original exato
+            'norm': normalize_for_matching(token_text), # Texto normalizado para busca
+            'textStart': match.start(),
+            'textEnd': match.end(),
+            'start': -1.0,                     # Timestamp inicial (a preencher)
+            'end': -1.0,                       # Timestamp final (a preencher)
+            'confidence': 0.0,
+            'matched': False
+        })
     
-    if not original_words:
-        logger.warning("Original text has no words")
-        return [], [], []
+    if not original_tokens:
+        logger.warning("Original text has no tokens")
+        return []
     
-    # Normalizar para matching (remove diacríticos)
-    original_normalized = [normalize_for_matching(w) for w in original_words]
-    transcribed_normalized = [normalize_for_matching(w) for w in transcribed_words]
+    # 2. Preparar tokens do Whisper
+    trans_tokens = []
+    for ws in word_segments:
+        if not ws.get('text', '').strip(): continue
+        trans_tokens.append({
+            'text': ws['text'],
+            'norm': normalize_for_matching(ws['text']),
+            'start': ws['start'],
+            'end': ws['end']
+        })
+
+    # 3. Alinhamento Sequencial (Greedy Anchor Matching)
+    t_cursor = 0 # Cursor na lista de transcrição
+    LOOKAHEAD_TRANS = 8
     
-    matched_words = []
-    confidence_scores = []
-    text_positions = []
-    original_idx = 0
-    
-    # ← NOVO: Rastrear palavras já usadas para evitar duplicatas
-    used_indices = set()
-    
-    for trans_idx, trans_word in enumerate(transcribed_normalized):
-        best_match = None
-        best_ratio = 0.0
-        best_idx = original_idx
-        
-        # ← EXPANDIDO: Janela deslizante de 10 palavras (antes era 5)
-        # Permite pular mais palavras se Whisper omitiu/adicionou
-        search_start = max(0, original_idx - 2)  # ← NOVO: Olhar 2 palavras atrás também
-        search_end = min(len(original_normalized), original_idx + 10)
-        
-        for i in range(search_start, search_end):
-            # ← NOVO: Pular palavras já usadas (evita duplicatas)
-            if i in used_indices:
-                continue
-                
-            orig_word = original_normalized[i]
+    for o_idx, o_token in enumerate(original_tokens):
+        o_norm = o_token['norm']
+        if not o_norm: continue
             
-            # Calcular similaridade (Ratcliff-Obershelp algorithm)
-            ratio = SequenceMatcher(None, trans_word, orig_word).ratio()
-            
-            # Boost para matches exatos (sem diacríticos)
-            if trans_word == orig_word:
-                ratio = min(1.0, ratio + 0.15)  # +15% bonus
-            
-            if ratio > best_ratio:
-                best_ratio = ratio
-                best_match = original_words[i]  # Palavra ORIGINAL (com Unicode)
-                best_idx = i
+        best_score = 0.0
+        best_t_idx = -1
         
-        # ← AJUSTADO: Critério de aceitação mais rigoroso
-        # 1. Similaridade >= threshold (agora 40%)
-        # 2. OU é a próxima palavra sequencial (aceita mesmo com baixo score)
-        # 3. OU é a única palavra restante
-        # 4. E NÃO foi usada ainda
-        accept_match = (
-            best_ratio >= threshold and 
-            best_idx not in used_indices
-        ) or (
-            best_idx == original_idx and 
-            best_idx not in used_indices
-        ) or (
-            original_idx >= len(original_words) - 1 and 
-            best_idx not in used_indices
-        )
+        # Procurar match na janela do Whisper
+        search_limit = min(len(trans_tokens), t_cursor + LOOKAHEAD_TRANS)
         
-        if accept_match and best_match:
-            matched_words.append(best_match)
-            confidence_scores.append(best_ratio)
-            text_positions.append(word_positions[best_idx])
-            used_indices.add(best_idx)  # ← NOVO: Marcar como usado
-            original_idx = best_idx + 1
-        else:
-            # ← AJUSTADO: Fallback mais inteligente
-            # Se confidence muito baixa (< 0.3), provavelmente é ruído do Whisper
-            # Não adicionar ao resultado final
-            if best_ratio < 0.3:
-                logger.debug(f"Skipping low-confidence word: '{trans_word}' (score: {best_ratio:.2f})")
-                continue
+        for t in range(t_cursor, search_limit):
+            t_data = trans_tokens[t]
+            t_norm = t_data['norm']
+            if not t_norm: continue
             
-            # Fallback: usar palavra transcrita se tiver alguma similaridade
-            fallback_word = transcribed_words[trans_idx] if trans_idx < len(transcribed_words) else trans_word
-            matched_words.append(fallback_word)
-            confidence_scores.append(best_ratio)
-            text_positions.append((-1, -1))  # Posição desconhecida
-            logger.debug(f"Low confidence match: '{trans_word}' -> '{fallback_word}' (score: {best_ratio:.2f})")
+            # Match exato tem prioridade
+            if o_norm == t_norm:
+                best_score = 1.0
+                best_t_idx = t
+                break
+            
+            # Fuzzy match
+            score = SequenceMatcher(None, o_norm, t_norm).ratio()
+            dist = t - t_cursor
+            final_score = score - (dist * 0.02)
+            
+            if final_score > best_score and score >= threshold:
+                best_score = final_score
+                best_t_idx = t
+        
+        # Aplicar match se encontrado
+        if best_t_idx != -1:
+            match_data = trans_tokens[best_t_idx]
+            o_token['start'] = match_data['start']
+            o_token['end'] = match_data['end']
+            o_token['confidence'] = round(best_score if best_score <= 1.0 else 1.0, 2)
+            o_token['matched'] = True
+            t_cursor = best_t_idx + 1 
+            
+    # 4. Construir resultado final
+    result = []
+    for token in original_tokens:
+        # Só incluir timestamps se houve match
+        start = token['start'] if token['matched'] else -1.0
+        end = token['end'] if token['matched'] else -1.0
+        
+        result.append({
+            'text': token['text'],
+            'start': start,
+            'end': end,
+            'textStart': token['textStart'],
+            'textEnd': token['textEnd'],
+            'confidence': token['confidence']
+        })
+        
+    matched_count = sum(1 for r in result if r['confidence'] > 0)
+    logger.info(f"Alignment stats: {matched_count}/{len(result)} origin words matched.")
     
-    # Log estatísticas de matching
-    if confidence_scores:
-        avg_confidence = sum(confidence_scores) / len(confidence_scores)
-        skipped = len(transcribed_words) - len(matched_words)
-        logger.info(f"Matching complete: {len(matched_words)}/{len(transcribed_words)} words, "
-                   f"avg confidence: {avg_confidence:.2f}, skipped: {skipped}")
-    
-    return matched_words, confidence_scores, text_positions
+    return result
 
 
-def align_words(audio_path: str, text: str, lang: str) -> List[Dict]:
+def align_words(audio_path: str, text: str, lang: str) -> list:
     """
     Alinha palavras do áudio com timestamps usando faster-whisper.
-    
-    Otimizações para ARM64:
-    - Modelo 'base' pré-carregado (melhor acurácia)
-    - beam_size=3 (balanceado: qualidade vs velocidade)
-    - vad_filter=True (remove silêncios, melhora acurácia)
-    - language explícito (evita detecção automática)
-    - temperature=0.0 (determinístico, sem variação)
-    
-    Graceful degradation:
-    - NUNCA lança exceção (retorna [] em caso de erro)
-    - Log detalhado para debugging
-    - Fallback se matching falhar
-    
-    Performance esperada (ARM64, 4 OCPUs, modelo 'small'):
-    - Áudio 3-5s: ~3-4s de processamento
-    - Áudio 10s: ~6-8s de processamento
-    - Concorrência: suporta 2-3 requests simultâneos
-    - Accuracy: 85-95% para hebraico/grego
-    
-    Args:
-        audio_path: Caminho do arquivo MP3/WAV
-        text: Texto original (com niqqud/acentos preservados)
-        lang: Código de idioma MMS ('heb', 'ell', 'por')
-    
-    Returns:
-        Lista: [{"text": "palavra", "start": 0.0, "end": 0.5, "textStart": 0, "textEnd": 7, "confidence": 0.95}, ...]
-        Lista vazia [] se falhar (graceful degradation)
     """
     try:
-        # Validar arquivo de áudio
         if not os.path.exists(audio_path):
             logger.error(f"❌ Audio file not found: {audio_path}")
             return []
         
-        # Obter modelo (deve estar pré-inicializado)
         try:
             model = get_whisper_model()
         except RuntimeError as e:
             logger.error(f"❌ {e}")
             return []
         
-        # Mapear código de idioma MMS -> Whisper ISO
         from .multi_model_api import WHISPER_LANG_MAP
         whisper_lang = WHISPER_LANG_MAP.get(lang, lang)
         
-        logger.info(f"🎯 Starting word alignment: {os.path.basename(audio_path)} (lang: {whisper_lang})")
+        logger.info(f"🎯 Starting word alignment (Anchor-Based): {os.path.basename(audio_path)}")
         
-        # Pré-processar áudio (normalização, mono, 16kHz)
         preprocessed_path = preprocess_audio(audio_path)
         
+        # Usar início do texto como prompt para guiar o Whisper
+        prompt_text = text[:200].strip() if text else ("תנ״ך" if lang == "heb" else None)
+
         # Transcrever com word-level timestamps
-        # Configuração OTIMIZADA para ARM64 CPU + modelo 'small'
         segments, info = model.transcribe(
             preprocessed_path,
-            language=whisper_lang,     # Explícito: evita detecção automática (mais rápido)
-            word_timestamps=True,      # Ativar timestamps por palavra
-            
-            # VAD (Voice Activity Detection) otimizado
+            language=whisper_lang,
+            word_timestamps=True,
             vad_filter=True,
-            vad_parameters={
-                "threshold": 0.5,              # Mais sensível a voz
-                "min_speech_duration_ms": 100, # Captura palavras curtas
-                "min_silence_duration_ms": 500 # Evita cortes no meio de palavras
-            },
-            
-            # Beam search AUMENTADO (melhor acurácia vs base)
-            beam_size=5,               # +2 vs base: mais preciso
-            best_of=5,                 # +2 vs base: mais candidates
-            patience=1.0,              # Aguarda melhores candidates
-            
-            # Outros parâmetros
-            temperature=0.0,           # Determinístico (greedy decoding)
-            condition_on_previous_text=False,  # Independente: melhor para frases curtas
-            compression_ratio_threshold=2.4,   # Detecta repetições
-            log_prob_threshold=-1.0,           # Filtro de baixa confiança
-            no_speech_threshold=0.6,           # Detecta silêncio
-            
-            # Prompt contextual para hebraico bíblico (opcional)
-            initial_prompt="תנ״ך" if lang == "heb" else None
+            vad_parameters=dict(min_silence_duration_ms=500),
+            beam_size=10,  # Aumentado para melhor precisão (era 5)
+            best_of=5,
+            patience=1.0, 
+            temperature=0.0,
+            condition_on_previous_text=False,
+            initial_prompt=prompt_text
         )
         
-        # Limpar arquivo temporário normalizado
         if preprocessed_path != audio_path and os.path.exists(preprocessed_path):
             try:
                 os.remove(preprocessed_path)
-            except Exception as e:
-                logger.debug(f"Could not remove temp file: {e}")
+            except Exception:
+                pass
         
-        # Extrair palavras com timestamps
-        transcribed_words = []
+        # Extrair palavras com timestamps (Flat list)
         word_segments = []
-        
         for segment in segments:
             if hasattr(segment, 'words') and segment.words:
                 for word in segment.words:
                     word_text = word.word.strip()
-                    if word_text:  # Ignorar vazios
-                        transcribed_words.append(word_text)
+                    if word_text:
                         word_segments.append({
                             'text': word_text,
                             'start': round(word.start, 2),
@@ -458,83 +423,22 @@ def align_words(audio_path: str, text: str, lang: str) -> List[Dict]:
                         })
         
         if not word_segments:
-            logger.warning(f"⚠️  No words detected in audio: {audio_path}")
+            logger.warning(f"⚠️  No words detected in audio")
             return []
-        
-        logger.info(f"📝 Transcribed {len(transcribed_words)} words from Whisper")
-        
-        # Fazer fuzzy matching com texto original (preservar Unicode)
-        matched_words, confidence_scores, text_positions = fuzzy_match_words(
-            transcribed_words, 
-            text,
-            threshold=0.5  # 50% similaridade mínima
-        )
-        
-        # Combinar palavras matched com timestamps
-        result = []
-        for i, word_data in enumerate(word_segments):
-            # Usar palavra original (com Unicode) se disponível
-            if i < len(matched_words):
-                word_text = matched_words[i]
-                match_confidence = confidence_scores[i] if i < len(confidence_scores) else 0.0
-                text_start, text_end = text_positions[i] if i < len(text_positions) else (-1, -1)
-            else:
-                # Fallback: palavra transcrita
-                word_text = word_data['text']
-                match_confidence = 0.0
-                text_start, text_end = -1, -1
             
-            result.append({
-                'text': word_text,
-                'start': word_data['start'],
-                'end': word_data['end'],
-                'textStart': text_start,
-                'textEnd': text_end,
-                'confidence': round(match_confidence, 2)  # Adicionar score de confiança
-            })
+        logger.info(f"📝 Whisper detected {len(word_segments)} words")
         
-        # Validação final
-        if result:
-            total_duration = result[-1]['end']
-            avg_confidence = sum(w['confidence'] for w in result) / len(result)
-            logger.info(f"✅ Alignment complete: {len(result)} words, "
-                       f"duration: {total_duration:.2f}s, "
-                       f"avg confidence: {avg_confidence:.2f}")
+        # NOVO ALINHAMENTO (Original-Centric)
+        # Passa a lista bruta do Whisper e o texto original
+        result = fuzzy_match_words(
+            word_segments, 
+            text,
+            threshold=0.55
+        )
+            
         return result
         
-    except ImportError as e:
-        logger.error(f"❌ faster-whisper not available: {e}")
-        return []
     except Exception as e:
-        # CRÍTICO: NUNCA lançar exceção (graceful degradation)
         logger.error(f"❌ Error during word alignment: {e}", exc_info=True)
         return []
 
-
-def validate_alignment(words: List[Dict], audio_duration: float) -> bool:
-    """
-    Valida se o alinhamento é razoável
-    
-    Args:
-        words: Lista de palavras com timestamps
-        audio_duration: Duração do áudio em segundos
-    
-    Returns:
-        True se alinhamento parece válido
-    """
-    if not words:
-        return False
-    
-    # Verificar se timestamps estão dentro da duração
-    last_word_end = words[-1]['end']
-    if last_word_end > audio_duration * 1.2:  # Tolerância de 20%
-        logger.warning(f"Last word timestamp ({last_word_end}s) exceeds audio duration ({audio_duration}s)")
-        return False
-    
-    # Verificar se timestamps estão em ordem crescente
-    for i in range(len(words) - 1):
-        if words[i]['end'] > words[i + 1]['start']:
-            logger.warning(f"Word timestamps not in order: {words[i]} -> {words[i+1]}")
-            return False
-    
-    return True
