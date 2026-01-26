@@ -4,7 +4,7 @@ services:
   aletheia-tts-local:
     build: 
       context: .
-      dockerfile: Dockerfile.local
+      dockerfile: Dockerfile.mfa
     container_name: aletheia-tts-local
     ports:
       - "8000:8000"
@@ -13,8 +13,8 @@ services:
       - ./:/app
       # Cache persistente para modelos TTS (evita re-download)
       - hf-cache-local:/app/.cache/huggingface
-      # Cache para Whisper (word alignment)
-      - whisper-cache-local:/app/.cache/whisper
+      # Cache para MFA (word alignment models)
+      - mfa-cache-local:/app/.cache/mfa
       # Banco de dados SQLite (persistente)
       - ./data:/app/data
       # Logs persistentes
@@ -26,11 +26,8 @@ services:
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=info
       
-      # Whisper CUDA (Notebook Local)
-      - WHISPER_CACHE_DIR=/app/.cache/whisper
-      - WHISPER_DEVICE=cuda
-      - WHISPER_COMPUTE_TYPE=float16
-      - WHISPER_MODEL=medium
+      # MFA (Montreal Forced Aligner)
+      - MFA_CACHE_DIR=/app/.cache/mfa
       
       # Hugging Face cache
       - HF_HOME=/app/.cache/huggingface
@@ -45,7 +42,7 @@ services:
       - TOKEN_EXPIRE_MINUTES=60
       
       # Database
-      - DATABASE_PATH=/app/data/tts_auth.db
+      - DATABASE_PATH=/app/data/aletheia.db
       
       # Usuários (opcional, ajuste conforme necessário)
       - ADMIN_USERNAME=admin
@@ -55,15 +52,6 @@ services:
       - DEMO_PASSWORD=demo123
       - DEMO_EMAIL=demo@example.com
     
-    # Configuração para GPU NVIDIA (requer nvidia-docker/nvidia-container-toolkit)
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1  # Usar 1 GPU NVIDIA
-              capabilities: [gpu]
-    
     restart: unless-stopped
     
     healthcheck:
@@ -71,10 +59,10 @@ services:
       interval: 60s
       timeout: 15s
       retries: 3
-      start_period: 120s  # Whisper medium pode levar mais tempo no primeiro load
+      start_period: 180s  # MFA download de modelos pode levar mais tempo
 
 volumes:
   hf-cache-local:
     driver: local
-  whisper-cache-local:
+  mfa-cache-local:
     driver: local

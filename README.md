@@ -24,16 +24,36 @@ Sherpa-ONNX aplica automaticamente:
 - Normalização de texto
 - Processamento correto de diacríticos (niqqud, acentos)
 
-## ✨ **Novidade: Word-Level Alignment** 🎯
+## ✨ **Novidade: Forced Alignment** 🎯
 
-Suporte a **sincronização palavra-por-palavra**!
+Suporte a **alinhamento palavra-por-palavra** usando Whisper!
 
-- 🎤 Endpoint `/speak_sync` retorna timestamps por palavra
-- 🎨 Perfeito para karaoke-style highlighting
-- 📖 Ideal para aplicativos de aprendizado de idiomas
+- 🎤 Endpoint `/speak_sync` retorna áudio + timestamps por palavra
+- 🎯 **Forced alignment**: texto original como fonte da verdade
+- 🎨 Perfeito para highlight sincronizado em apps de Bíblia
+- 📖 Ideal para karaoke-style e aprendizado de idiomas
 - 🔤 Preserva Unicode (niqqud hebraico, acentos gregos)
+- ⚙️ Configuração determinística (temperature=0, beam_size=1)
+- 💪 Robusto com fallback para timestamps estimados
 
-**Documentação completa**: [`resources/WORD_ALIGNMENT_GUIDE.md`](resources/WORD_ALIGNMENT_GUIDE.md)
+**Documentação completa**: [`FORCED_ALIGNMENT.md`](FORCED_ALIGNMENT.md)
+
+### Exemplo Rápido
+
+```python
+import requests
+
+response = requests.post("http://localhost:8000/speak_sync", data={
+    "text": "בְּרֵאשִׁית בָּרָא אֱלֹהִים",
+    "model": "hebrew",
+    "return_audio": True
+})
+
+result = response.json()
+# result['audio_base64'] - áudio em base64
+# result['word_timestamps'] - timestamps por palavra
+# result['alignment_stats'] - estatísticas de qualidade
+```
 
 ---
 

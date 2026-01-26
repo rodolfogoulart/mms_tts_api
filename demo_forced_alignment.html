@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Forced Alignment Demo - Word Highlighting</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            direction: ltr;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+        }
+
+        h1 {
+            text-align: center;
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        select, input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        button {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: 600;
+        }
+
+        .status.loading {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .text-display {
+            margin-top: 30px;
+            padding: 30px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            font-size: 28px;
+            line-height: 1.8;
+            text-align: center;
+            min-height: 150px;
+            direction: rtl; /* RTL para hebraico/árabe por padrão */
+        }
+
+        .text-display.ltr {
+            direction: ltr; /* LTR para grego/português */
+        }
+
+        .word {
+            display: inline-block;
+            padding: 4px 8px;
+            margin: 2px;
+            border-radius: 4px;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+
+        .word.highlight {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .word:hover {
+            background: #e9ecef;
+        }
+
+        .stats {
+            margin-top: 20px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 12px;
+        }
+
+        .stats h3 {
+            color: #667eea;
+            margin-bottom: 15px;
+        }
+
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #dee2e6;
+        }
+
+        .stat-item:last-child {
+            border-bottom: none;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e9ecef;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+        }
+
+        .audio-controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        audio {
+            width: 100%;
+            max-width: 500px;
+            margin-top: 10px;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 Forced Alignment Demo</h1>
+        <p class="subtitle">Word-by-Word Synchronized Highlighting</p>
+
+        <div class="form-group">
+            <label for="text">Text (Hebrew, Greek, or Portuguese):</label>
+            <textarea id="text" placeholder="Enter text...">בְּרֵאשִׁית בָּרָא אֱלֹהִים אֵת הַשָּׁמַיִם וְאֵת הָאָרֶץ</textarea>
+        </div>
+
+        <div class="form-group">
+            <label for="model">Language Model:</label>
+            <select id="model">
+                <option value="hebrew">Hebrew (עברית)</option>
+                <option value="greek">Greek (Ελληνικά)</option>
+                <option value="portuguese">Portuguese (Português)</option>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="speed">Speech Speed:</label>
+            <input type="range" id="speed" min="0.5" max="2.0" step="0.1" value="1.0">
+            <span id="speed-value">1.0x</span>
+        </div>
+
+        <div class="button-group">
+            <button class="btn-primary" id="generate-btn">🎤 Generate & Align</button>
+        </div>
+
+        <div id="status" class="status hidden"></div>
+
+        <div id="text-display" class="text-display hidden"></div>
+
+        <div id="audio-controls" class="audio-controls hidden">
+            <audio id="audio-player" controls></audio>
+        </div>
+
+        <div id="stats" class="stats hidden">
+            <h3>📊 Alignment Statistics</h3>
+            <div class="stat-item">
+                <span>Total Words:</span>
+                <strong id="total-words">-</strong>
+            </div>
+            <div class="stat-item">
+                <span>Matched Words:</span>
+                <strong id="matched-words">-</strong>
+            </div>
+            <div class="stat-item">
+                <span>Match Quality:</span>
+                <strong id="match-ratio">-</strong>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-fill" style="width: 0%">0%</div>
+            </div>
+            <div class="stat-item">
+                <span>Audio Duration:</span>
+                <strong id="audio-duration">-</strong>
+            </div>
+            <div class="stat-item">
+                <span>Processing Time:</span>
+                <strong id="processing-time">-</strong>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8000';
+        let wordTimestamps = [];
+        let audioPlayer = null;
+        let currentHighlightIndex = -1;
+
+        // Update speed display
+        document.getElementById('speed').addEventListener('input', (e) => {
+            document.getElementById('speed-value').textContent = e.target.value + 'x';
+        });
+
+        // Generate button click
+        document.getElementById('generate-btn').addEventListener('click', async () => {
+            const text = document.getElementById('text').value.trim();
+            const model = document.getElementById('model').value;
+            const speed = parseFloat(document.getElementById('speed').value);
+
+            if (!text) {
+                showStatus('Please enter some text', 'error');
+                return;
+            }
+
+            showStatus('🔄 Generating audio and aligning timestamps...', 'loading');
+            document.getElementById('generate-btn').disabled = true;
+
+            try {
+                const formData = new URLSearchParams();
+                formData.append('text', text);
+                formData.append('model', model);
+                formData.append('speed', speed);
+                formData.append('output_format', 'mp3');
+                formData.append('return_audio', 'true');
+
+                const response = await fetch(`${API_URL}/speak_sync`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                
+                // Store timestamps
+                wordTimestamps = result.word_timestamps;
+
+                // Display text with clickable words
+                displayTextWithWords(result.word_timestamps, model);
+
+                // Setup audio
+                const audioBlob = base64ToBlob(result.audio_base64, 'audio/mp3');
+                const audioUrl = URL.createObjectURL(audioBlob);
+                audioPlayer = document.getElementById('audio-player');
+                audioPlayer.src = audioUrl;
+
+                // Show stats
+                displayStats(result);
+
+                // Setup audio timeupdate listener for highlighting
+                audioPlayer.addEventListener('timeupdate', updateHighlight);
+
+                showStatus('✅ Success! Click play or click on words to hear them.', 'success');
+                document.getElementById('audio-controls').classList.remove('hidden');
+                document.getElementById('stats').classList.remove('hidden');
+
+            } catch (error) {
+                console.error('Error:', error);
+                showStatus(`❌ Error: ${error.message}`, 'error');
+            } finally {
+                document.getElementById('generate-btn').disabled = false;
+            }
+        });
+
+        function displayTextWithWords(timestamps, model) {
+            const textDisplay = document.getElementById('text-display');
+            textDisplay.innerHTML = '';
+            textDisplay.classList.remove('hidden');
+            
+            // Set direction based on language
+            if (model === 'hebrew') {
+                textDisplay.classList.remove('ltr');
+            } else {
+                textDisplay.classList.add('ltr');
+            }
+
+            timestamps.forEach((word, index) => {
+                const span = document.createElement('span');
+                span.className = 'word';
+                span.textContent = word.text;
+                span.dataset.index = index;
+                span.dataset.start = word.start;
+                span.dataset.end = word.end;
+
+                // Click to play from this word
+                span.addEventListener('click', () => {
+                    if (audioPlayer && word.start >= 0) {
+                        audioPlayer.currentTime = word.start;
+                        audioPlayer.play();
+                    }
+                });
+
+                textDisplay.appendChild(span);
+            });
+        }
+
+        function updateHighlight() {
+            if (!audioPlayer) return;
+
+            const currentTime = audioPlayer.currentTime;
+            const words = document.querySelectorAll('.word');
+
+            words.forEach((wordEl, index) => {
+                const start = parseFloat(wordEl.dataset.start);
+                const end = parseFloat(wordEl.dataset.end);
+
+                if (currentTime >= start && currentTime <= end) {
+                    if (currentHighlightIndex !== index) {
+                        wordEl.classList.add('highlight');
+                        currentHighlightIndex = index;
+                    }
+                } else {
+                    wordEl.classList.remove('highlight');
+                }
+            });
+        }
+
+        function displayStats(result) {
+            document.getElementById('total-words').textContent = result.alignment_stats.total_words;
+            document.getElementById('matched-words').textContent = result.alignment_stats.matched_words;
+            
+            const matchRatio = result.alignment_stats.match_ratio;
+            const matchPercent = Math.round(matchRatio * 100);
+            document.getElementById('match-ratio').textContent = `${matchPercent}%`;
+            
+            const progressFill = document.getElementById('progress-fill');
+            progressFill.style.width = `${matchPercent}%`;
+            progressFill.textContent = `${matchPercent}%`;
+
+            document.getElementById('audio-duration').textContent = `${result.audio_duration.toFixed(2)}s`;
+            document.getElementById('processing-time').textContent = 
+                `${result.processing_time.total_seconds.toFixed(2)}s`;
+        }
+
+        function showStatus(message, type) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = `status ${type}`;
+            statusEl.classList.remove('hidden');
+        }
+
+        function base64ToBlob(base64, mimeType) {
+            const byteCharacters = atob(base64);
+            const byteArrays = [];
+
+            for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+                const slice = byteCharacters.slice(offset, offset + 512);
+                const byteNumbers = new Array(slice.length);
+                
+                for (let i = 0; i < slice.length; i++) {
+                    byteNumbers[i] = slice.charCodeAt(i);
+                }
+                
+                const byteArray = new Uint8Array(byteNumbers);
+                byteArrays.push(byteArray);
+            }
+
+            return new Blob(byteArrays, { type: mimeType });
+        }
+    </script>
+</body>
+</html>

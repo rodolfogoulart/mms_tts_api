@@ -27,6 +27,7 @@ import uuid
 import hashlib
 import logging
 import time
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -53,7 +54,16 @@ except ImportError:
 # LOGGING CONFIGURATION
 # ============================================
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("apscheduler").setLevel(logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Word alignment for forced alignment
+try:
+    from .word_alignment import forced_align_audio_to_text, init_mfa
+    WORD_ALIGNMENT_AVAILABLE = True
+except ImportError:
+    WORD_ALIGNMENT_AVAILABLE = False
+    logger.warning("⚠️  Word alignment module not available")
 
 # ============================================
 # APPLICATION CONFIGURATION
@@ -450,7 +460,7 @@ async def speak(
             logger.info(f"MP3 final file size: {os.path.getsize(cache_file) / 1024:.2f} KB")
             os.remove(temp_wav)
         else:
-            os.rename(temp_wav, cache_file)
+            shutil.move(temp_wav, cache_file)
             logger.info(f"WAV final file size: {os.path.getsize(cache_file) / 1024:.2f} KB")
         
         return FileResponse(
@@ -462,6 +472,206 @@ async def speak(
     except Exception as e:
         logger.error(f"TTS generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"TTS generation failed: {e}")
+
+
+@app.post("/speak_sync")
+async def speak_with_word_alignment(
+    text: str = Form(...),
+    model: str = Form("hebrew"),
+    speed: float = Form(1.0),
+    output_format: str = Form("mp3"),
+    return_audio: bool = Form(True),
+    user = Depends(get_rate_limited_user)
+):
+    """
+    Generate speech with word-level timestamps (FORCED ALIGNMENT)
+    
+    Este endpoint:
+    1. Gera áudio via MMS-TTS (Sherpa-ONNX)
+    2. Executa forced alignment via Whisper (timestamps palavra-por-palavra)
+    3. Retorna JSON com áudio + timestamps alinhados ao texto original
+    
+    O texto fornecido é a ÚNICA FONTE DA VERDADE.
+    O Whisper é usado APENAS para obter timestamps, não para reconhecimento.
+    
+    Args:
+    - **text**: Texto original (hebraico, grego ou português)
+    - **model**: Modelo TTS (hebrew, greek, portuguese)
+    - **speed**: Velocidade da fala (0.5-2.0)
+    - **output_format**: Formato do áudio (mp3 ou wav)
+    - **return_audio**: Se True, inclui áudio base64 no JSON
+    
+    Returns:
+        JSON com estrutura:
+        {
+            "text": str,              # Texto original
+            "model": str,             # Modelo usado
+            "speed": float,           # Velocidade
+            "audio_duration": float,  # Duração em segundos
+            "audio_file": str,        # Nome do arquivo (se return_audio=False)
+            "audio_base64": str,      # Áudio em base64 (se return_audio=True)
+            "word_timestamps": [      # Timestamps por palavra
+                {
+                    "text": str,      # Palavra original
+                    "start": float,   # Timestamp início (segundos)
+                    "end": float,     # Timestamp fim (segundos)
+                    "textStart": int, # Posição no texto original (char index)
+                    "textEnd": int,   # Posição fim no texto
+                    "confidence": float # Confiança do alinhamento (0-1)
+                }
+            ],
+            "alignment_stats": {
+                "total_words": int,
+                "matched_words": int,
+                "match_ratio": float
+            }
+        }
+    """
+    if not WORD_ALIGNMENT_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Word alignment feature not available. Install faster-whisper first."
+        )
+    
+    # Validações
+    if not text or not text.strip():
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+    
+    if model not in MODEL_CONFIG:
+        raise HTTPException(status_code=400, detail=f"Unknown model: {model}")
+    
+    if not (0.5 <= speed <= 2.0):
+        raise HTTPException(status_code=400, detail="Speed must be between 0.5 and 2.0")
+    
+    if output_format not in ["mp3", "wav"]:
+        raise HTTPException(status_code=400, detail="Format must be mp3 or wav")
+    
+    # Mapa de modelo -> código de idioma Whisper
+    LANGUAGE_MAP = {
+        "hebrew": "he",
+        "greek": "el",
+        "portuguese": "pt"
+    }
+    whisper_lang = LANGUAGE_MAP.get(model, "he")
+    
+    logger.info(f"🎯 Forced alignment request: model={model}, lang={whisper_lang}, speed={speed}")
+    logger.info(f"   Text: '{text[:50]}...' ({len(text)} chars)")
+    
+    try:
+        # 1. Carregar modelo TTS
+        model_wrapper = load_sherpa_onnx_model(model)
+        
+        # 2. Gerar áudio via Sherpa-ONNX
+        start_tts = time.time()
+        audio_samples, sample_rate = model_wrapper.generate(text, sid=0, speed=speed)
+        elapsed_tts = time.time() - start_tts
+        
+        # Converter para numpy se necessário
+        if not isinstance(audio_samples, np.ndarray):
+            audio_samples = np.array(audio_samples, dtype=np.float32)
+        
+        # Garantir 1D array
+        if len(audio_samples.shape) > 1:
+            audio_samples = audio_samples.flatten()
+        
+        # Salvar áudio temporário (WAV para Whisper)
+        temp_wav = os.path.join(TEMP_DIR, f"{uuid.uuid4()}.wav")
+        audio_int16 = np.int16(np.clip(audio_samples * 32767, -32768, 32767))
+        write(temp_wav, sample_rate, audio_int16)
+        
+        audio_duration = len(audio_samples) / sample_rate
+        rtf_tts = elapsed_tts / audio_duration if audio_duration > 0 else 0
+        
+        logger.info(f"✅ TTS: {audio_duration:.2f}s audio in {elapsed_tts:.2f}s (RTF: {rtf_tts:.2f}x)")
+        
+        # 3. Executar FORCED ALIGNMENT
+        start_align = time.time()
+        word_timestamps, audio_dur = forced_align_audio_to_text(
+            audio_path=temp_wav,
+            original_text=text,
+            language=whisper_lang,
+            normalize_audio=True
+        )
+        elapsed_align = time.time() - start_align
+        
+        logger.info(f"✅ Alignment: {len(word_timestamps)} words in {elapsed_align:.2f}s")
+        
+        # 4. Estatísticas de alinhamento
+        matched_words = sum(1 for w in word_timestamps if w['confidence'] > 0)
+        match_ratio = matched_words / len(word_timestamps) if word_timestamps else 0
+        
+        alignment_stats = {
+            "total_words": len(word_timestamps),
+            "matched_words": matched_words,
+            "match_ratio": round(match_ratio, 2)
+        }
+        
+        # 5. Preparar resposta
+        response_data = {
+            "text": text,
+            "model": model,
+            "speed": speed,
+            "audio_duration": round(audio_duration, 2),
+            "word_timestamps": word_timestamps,
+            "alignment_stats": alignment_stats,
+            "processing_time": {
+                "tts_seconds": round(elapsed_tts, 2),
+                "alignment_seconds": round(elapsed_align, 2),
+                "total_seconds": round(elapsed_tts + elapsed_align, 2)
+            }
+        }
+        
+        # 6. Converter áudio para formato solicitado
+        if output_format == "mp3":
+            audio_segment = AudioSegment.from_wav(temp_wav)
+            temp_output = os.path.join(TEMP_DIR, f"{uuid.uuid4()}.mp3")
+            audio_segment.export(temp_output, format="mp3", bitrate="128k")
+            os.remove(temp_wav)  # Remover WAV temporário
+            final_audio = temp_output
+        else:
+            final_audio = temp_wav
+        
+        # 7. Incluir áudio na resposta
+        if return_audio:
+            # Ler áudio e converter para base64
+            import base64
+            with open(final_audio, 'rb') as f:
+                audio_bytes = f.read()
+            audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+            response_data["audio_base64"] = audio_base64
+            response_data["audio_format"] = output_format
+            
+            # Limpar arquivo temporário
+            try:
+                os.remove(final_audio)
+            except Exception as e:
+                logger.warning(f"Failed to remove temp audio: {e}")
+        else:
+            # Mover para cache
+            cache_key = get_cache_key(text, model, speed, output_format)
+            cache_file = os.path.join(CACHE_DIR, f"tts_{cache_key}.{output_format}")
+            shutil.move(final_audio, cache_file)
+            response_data["audio_file"] = f"tts_{cache_key}.{output_format}"
+            response_data["audio_url"] = f"/cache/{cache_key}"
+        
+        total_time = elapsed_tts + elapsed_align
+        logger.info(f"✅ Total processing: {total_time:.2f}s (TTS: {elapsed_tts:.2f}s + Alignment: {elapsed_align:.2f}s)")
+        logger.info(f"   Alignment quality: {match_ratio:.1%} ({matched_words}/{len(word_timestamps)} words)")
+        
+        return response_data
+        
+    except Exception as e:
+        logger.error(f"❌ Forced alignment failed: {e}")
+        # Limpar arquivos temporários em caso de erro
+        try:
+            if 'temp_wav' in locals() and os.path.exists(temp_wav):
+                os.remove(temp_wav)
+            if 'final_audio' in locals() and os.path.exists(final_audio):
+                os.remove(final_audio)
+        except:
+            pass
+        raise HTTPException(status_code=500, detail=f"Forced alignment failed: {str(e)}")
+
 
 @app.get("/models")
 async def list_models():
@@ -504,6 +714,16 @@ async def startup_event():
         load_sherpa_onnx_model("hebrew")
     except Exception as e:
         logger.warning(f"Failed to preload Hebrew model: {e}")
+    
+    # Initialize Whisper model for word alignment
+    if WORD_ALIGNMENT_AVAILABLE:
+        try:
+            logger.info("Initializing MFA (Montreal Forced Aligner) for forced alignment...")
+            init_mfa()
+            logger.info("✅ Whisper model ready for forced alignment")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to initialize Whisper model: {e}")
+            logger.warning("   Word alignment features will not be available")
 
 @app.on_event("shutdown")
 async def shutdown_event():

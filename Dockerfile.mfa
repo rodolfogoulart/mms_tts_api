@@ -1,0 +1,125 @@
+# ============================================
+# Stage 1: Instalar Miniconda e MFA
+# ============================================
+FROM continuumio/miniconda3:latest AS mfa-builder
+
+# Instalar MFA via conda + Python deps essenciais
+RUN conda create -n aligner -c conda-forge montreal-forced-aligner python=3.10 && \
+    conda clean -a -y &&  \
+    /opt/conda/envs/aligner/bin/pip install --no-cache-dir uvicorn[standard] fastapi
+
+# ============================================
+# Stage 2: Builder Python
+# ============================================
+FROM python:3.10-slim AS builder
+
+# Instalar dependências de build + Git
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Definir diretório de trabalho
+WORKDIR /build
+
+# Copiar arquivos locais
+COPY requirements.txt .
+
+# Criar ambiente virtual
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Instalar dependências Python
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip cache purge
+
+# ============================================
+# Stage 3: Final com Conda + Python
+# ============================================
+FROM continuumio/miniconda3:latest
+
+# Instalar runtime essenciais
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    curl \
+    ca-certificates \
+    gosu \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copiar ambiente conda do MFA
+COPY --from=mfa-builder /opt/conda/envs/aligner /opt/conda/envs/aligner
+
+# Copiar ambiente virtual Python do builder (para dependências extras)
+COPY --from=builder /opt/venv /opt/venv
+
+# Adicionar Python requirements via pip no ambiente conda
+RUN /opt/conda/envs/aligner/bin/pip install --no-cache-dir -r /opt/venv/lib/python3.10/site-packages/*.dist-info/METADATA 2>/dev/null || \
+    /opt/conda/envs/aligner/bin/pip install --no-cache-dir \
+    sherpa-onnx huggingface-hub pydub scipy numpy fastapi uvicorn python-multipart jinja2 \
+    librosa soundfile requests aiofiles psutil pyjwt python-jose passlib apscheduler textgrid praat-parselmouth
+
+# Configurar PATH para usar conda aligner
+ENV PATH="/opt/conda/envs/aligner/bin:$PATH" \
+    MFA_ROOT_DIR=/app/.cache/mfa \
+    CONDA_DEFAULT_ENV=aligner
+
+# Copiar código da aplicação local
+COPY . /app
+
+# Criar usuário não-root
+RUN useradd --create-home --uid 1000 app && \
+    chown -R app:app /app
+
+# Criar diretórios necessários
+RUN mkdir -p /app/data /app/temp /app/logs /app/.cache/huggingface /app/.cache/mfa /app/.cache/onnx_models && \
+    chown -R app:app /app/data /app/temp /app/logs /app/.cache
+
+# Criar script de entrypoint
+RUN echo '#!/bin/bash' > /entrypoint.sh && \
+    echo 'set -e' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo 'echo "📁 Configurando permissões..."' >> /entrypoint.sh && \
+    echo 'mkdir -p /app/data /app/temp /app/logs /app/.cache/mfa /app/.cache/onnx_models' >> /entrypoint.sh && \
+    echo 'chown -R app:app /app/data /app/temp /app/logs /app/.cache' >> /entrypoint.sh && \
+    echo 'chmod 755 /app/data' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo 'echo "✅ Permissões OK!"' >> /entrypoint.sh && \
+    echo '' >> /entrypoint.sh && \
+    echo 'echo "👤 Iniciando como usuário app..."' >> /entrypoint.sh && \
+    echo '# MFA está no PATH via conda, mas usamos Python do venv para aplicação' >> /entrypoint.sh && \
+    echo 'exec gosu app "$@"' >> /entrypoint.sh && \
+    chmod +x /entrypoint.sh
+
+WORKDIR /app
+
+VOLUME ["/app/data", "/app/logs", "/app/temp", "/app/.cache"]
+
+# Variáveis de ambiente
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    HF_HOME=/app/.cache/huggingface \
+    MFA_CACHE_DIR=/app/.cache/mfa \
+    OMP_NUM_THREADS=4 \
+    PORT=8000
+
+# Configurações JWT
+ENV JWT_SECRET_KEY="your-super-secret-jwt-key-change-in-production-12345" \
+    TOKEN_EXPIRE_MINUTES=60 \
+    ALGORITHM=HS256
+
+# Caminho do banco de dados
+ENV DATABASE_PATH="/app/data/aletheia.db"
+
+# Expor porta
+EXPOSE 8000
+
+# Entrypoint
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Comando padrão (usar python do conda aligner)
+CMD ["python", "-m", "uvicorn", "app.multi_model_api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
